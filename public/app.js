@@ -33,7 +33,14 @@ const el = {
   navPluginLogs: document.getElementById("nav-plugin-logs"),
   viewDashboard: document.getElementById("view-dashboard"),
   viewLogs: document.getElementById("view-logs"),
-
+  // 모바일 네비게이션 드로어 요소
+  btnToggleSidebar: document.getElementById("btn-toggle-sidebar"),
+  btnCloseSidebar: document.getElementById("btn-close-sidebar"),
+  sidebarAside: document.getElementById("sidebar-aside"),
+  sidebarBackdrop: document.getElementById("sidebar-backdrop"),
+  btnMobileNavDashboard: document.getElementById("btn-mobile-nav-dashboard"),
+  btnOpenAliasesMobile: document.getElementById("btn-open-aliases-mobile"),
+  btnOpenSettingsMobile: document.getElementById("btn-open-settings-mobile"),
   // 대시보드 요소
   filterUser: document.getElementById("filter-user"),
   filterType: document.getElementById("filter-type"),
@@ -150,6 +157,26 @@ function bindEvents() {
   el.btnCloseAliases.addEventListener("click", closeAliasModal);
   el.btnCancelAliases.addEventListener("click", closeAliasModal);
   el.btnSaveAliases.addEventListener("click", saveAliases);
+
+  // 모바일 드로어 이벤트 바인딩
+  function openMobileSidebar() {
+    if (el.sidebarAside) el.sidebarAside.classList.add("drawer-open");
+    if (el.sidebarBackdrop) el.sidebarBackdrop.classList.remove("hidden");
+  }
+  function closeMobileSidebar() {
+    if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
+    if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
+  }
+
+  if (el.btnToggleSidebar) el.btnToggleSidebar.addEventListener("click", openMobileSidebar);
+  if (el.btnCloseSidebar) el.btnCloseSidebar.addEventListener("click", closeMobileSidebar);
+  if (el.sidebarBackdrop) el.sidebarBackdrop.addEventListener("click", closeMobileSidebar);
+  if (el.btnMobileNavDashboard) el.btnMobileNavDashboard.addEventListener("click", () => {
+    switchView("dashboard");
+    closeMobileSidebar();
+  });
+  if (el.btnOpenAliasesMobile) el.btnOpenAliasesMobile.addEventListener("click", openAliasModal);
+  if (el.btnOpenSettingsMobile) el.btnOpenSettingsMobile.addEventListener("click", openSettingsModal);
 }
 
 // 3. 뷰 전환
@@ -162,14 +189,17 @@ function switchView(viewName) {
     el.navDashboard.className =
       "w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors";
     stopLiveTail();
+    if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
+    if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
   } else {
     el.viewDashboard.classList.add("hidden");
     el.viewLogs.classList.remove("hidden");
     el.navDashboard.className =
       "w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-gray-400 hover:bg-gray-800/60 hover:text-gray-200 transition-colors";
+    if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
+    if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
   }
 }
-
 // 4. 대시보드 데이터 로드
 async function refreshDashboard() {
   await loadAliases();

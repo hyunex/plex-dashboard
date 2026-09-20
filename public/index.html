@@ -27,12 +27,40 @@
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
-<body class="bg-[#0e1117] text-gray-200 h-screen overflow-hidden flex font-sans antialiased">
+<body class="bg-[#0e1117] text-gray-200 h-screen overflow-hidden flex flex-col md:flex-row font-sans antialiased">
 
-  <!-- 좌측 사이드바 -->
-  <aside class="w-72 h-screen bg-[#161b22] border-r border-gray-800 flex flex-col flex-shrink-0 z-20">
+  <!-- 모바일 상단 탑바 (md 미만 화면에서만 노출) -->
+  <header class="md:hidden flex items-center justify-between px-3.5 py-2.5 bg-[#161b22] border-b border-gray-800 z-30 flex-shrink-0">
+    <div class="flex items-center space-x-2.5">
+      <button id="btn-toggle-sidebar" class="text-gray-300 hover:text-plex p-1.5 rounded-lg hover:bg-gray-800 transition-colors" title="메뉴 열기">
+        <i class="fa-solid fa-bars text-base"></i>
+      </button>
+      <div class="w-7 h-7 rounded-md bg-plex flex items-center justify-center text-black font-black text-sm shadow">
+        P
+      </div>
+      <span class="font-bold text-white text-sm tracking-tight">Plex 로그 매니저</span>
+    </div>
+    <div class="flex items-center space-x-1">
+      <button id="btn-mobile-nav-dashboard" class="px-2.5 py-1 text-xs rounded-md bg-plex/10 text-plex hover:bg-plex/20 transition-colors flex items-center space-x-1" title="대시보드로 이동">
+        <i class="fa-solid fa-chart-pie"></i>
+        <span>활동</span>
+      </button>
+      <button id="btn-open-aliases-mobile" class="text-gray-400 hover:text-plex p-1.5 rounded-lg hover:bg-gray-800 transition-colors" title="사용자 닉네임 설정">
+        <i class="fa-solid fa-user-pen text-sm"></i>
+      </button>
+      <button id="btn-open-settings-mobile" class="text-gray-400 hover:text-plex p-1.5 rounded-lg hover:bg-gray-800 transition-colors" title="설정">
+        <i class="fa-solid fa-gear text-sm"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- 모바일 사이드바 배경 오버레이 (클릭 시 닫힘) -->
+  <div id="sidebar-backdrop" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 hidden md:hidden transition-opacity"></div>
+
+  <!-- 좌측 사이드바 (데스크톱: 고정 사이드바 / 모바일: 슬라이드 드로어) -->
+  <aside id="sidebar-aside" class="fixed md:static inset-y-0 left-0 -translate-x-full md:translate-x-0 w-72 h-full bg-[#161b22] border-r border-gray-800 flex flex-col flex-shrink-0 z-50 transition-transform duration-200 ease-in-out">
     <!-- 로고 영역 -->
-    <div class="p-5 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
+    <div class="p-4 md:p-5 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
       <div class="flex items-center space-x-3">
         <div class="w-9 h-9 rounded-lg bg-plex flex items-center justify-center text-black font-black text-xl shadow-lg">
           P
@@ -48,6 +76,9 @@
         </button>
         <button id="btn-open-settings" class="text-gray-400 hover:text-plex transition-colors p-1.5 rounded-lg hover:bg-gray-800" title="보관 및 수집 설정">
           <i class="fa-solid fa-gear"></i>
+        </button>
+        <button id="btn-close-sidebar" class="md:hidden text-gray-400 hover:text-white p-1.5 rounded-lg hover:bg-gray-800" title="메뉴 닫기">
+          <i class="fa-solid fa-xmark text-lg"></i>
         </button>
       </div>
     </div>
@@ -101,98 +132,87 @@
       <div id="import-status-text" class="text-[11px] text-gray-500 truncate">자동 수집 주기: 30초</div>
     </div>
   </aside>
-
   <!-- 메인 컨텐츠 영역 -->
   <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0e1117]">
 
     <!-- 1. 사용자 활동 대시보드 뷰 -->
     <div id="view-dashboard" class="flex-1 flex flex-col min-h-0">
-      <div class="p-4 pb-2 space-y-3 flex-shrink-0 overflow-y-auto" style="max-height: 42vh;">
-      <!-- 상단 헤더 & 필터 바 -->
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#161b22] p-4 rounded-xl border border-gray-800 shadow-sm">
-        <div>
-          <h2 class="text-xl font-bold text-white flex items-center space-x-2">
-            <span>Plex 사용자 활동 피드</span>
-            <span class="text-xs font-normal text-gray-400 bg-gray-800 px-2 py-0.5 rounded-full" id="total-events-badge">0건</span>
-          </h2>
-          <p class="text-xs text-gray-400 mt-0.5">누가, 언제, 어떤 기기와 IP로 접속하여 무엇을 시청/다운로드했는지 모니터링합니다.</p>
-        </div>
-
-        <!-- 필터 컨트롤 그룹 -->
-        <div class="flex flex-wrap items-center gap-3">
-          <!-- 사용자 선택 드롭다운 -->
-          <div class="flex items-center space-x-2">
-            <label for="filter-user" class="text-xs text-gray-400 font-medium">사용자:</label>
-            <select id="filter-user" class="bg-[#0e1117] border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-plex">
-              <option value="all">전체 사용자 (모두 보기)</option>
-              <!-- JS로 채워짐 -->
-            </select>
+      <!-- 상단 컨트롤 & 컴팩트 통계 칩 바 -->
+      <div class="p-3 md:p-4 pb-2 space-y-2 flex-shrink-0">
+        <!-- 상단 헤더 & 필터 바 -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-[#161b22] px-3.5 py-2.5 rounded-xl border border-gray-800 shadow-sm">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm md:text-base font-bold text-white flex items-center space-x-2">
+              <span>Plex 사용자 활동</span>
+              <span class="text-[11px] font-medium text-gray-300 bg-gray-800 px-2 py-0.5 rounded-full" id="total-events-badge">0건</span>
+            </h2>
           </div>
 
-          <!-- 활동 유형 선택 드롭다운 -->
-          <div class="flex items-center space-x-2">
-            <label for="filter-type" class="text-xs text-gray-400 font-medium">활동 유형:</label>
-            <select id="filter-type" class="bg-[#0e1117] border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-plex">
-              <option value="all">모든 활동</option>
-              <option value="PLAYING">시청 중 (진행률)</option>
-              <option value="PLAY_START">시청 시작</option>
-              <option value="PAUSE">일시정지</option>
-              <option value="STOP">시청 종료</option>
-              <option value="DOWNLOAD">미디어 다운로드</option>
-              <option value="CONNECT">서버 접속</option>
-            </select>
-          </div>
+          <!-- 필터 컨트롤 그룹 (모바일에서 가로 스크롤 또는 유연한 배치) -->
+          <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            <!-- 사용자 선택 드롭다운 -->
+            <div class="flex items-center space-x-1.5 flex-1 sm:flex-initial">
+              <select id="filter-user" class="w-full sm:w-auto bg-[#0e1117] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-plex">
+                <option value="all">전체 사용자 (모두 보기)</option>
+                <!-- JS로 채워짐 -->
+              </select>
+            </div>
 
-          <!-- 새로고침 버튼 -->
-          <button id="btn-refresh-activities" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-sm flex items-center space-x-1.5 transition-colors">
-            <i class="fa-solid fa-rotate-right"></i>
-            <span>새로고침</span>
-          </button>
-        </div>
-      </div>
+            <!-- 활동 유형 선택 드롭다운 -->
+            <div class="flex items-center space-x-1.5 flex-1 sm:flex-initial">
+              <select id="filter-type" class="w-full sm:w-auto bg-[#0e1117] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-plex">
+                <option value="all">모든 활동</option>
+                <option value="PLAYING">시청 중 (진행률)</option>
+                <option value="PLAY_START">시청 시작</option>
+                <option value="PAUSE">일시정지</option>
+                <option value="STOP">시청 종료</option>
+                <option value="DOWNLOAD">미디어 다운로드</option>
+                <option value="CONNECT">서버 접속</option>
+              </select>
+            </div>
 
-      <!-- 요약 통계 위젯 카드 -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="bg-[#161b22] p-4 rounded-xl border border-gray-800 flex items-center space-x-4">
-          <div class="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl">
-            <i class="fa-solid fa-users"></i>
-          </div>
-          <div>
-            <p class="text-xs text-gray-400 font-medium">오늘 접속 사용자</p>
-            <p class="text-2xl font-black text-white" id="stat-active-users">0 <span class="text-xs font-normal text-gray-500">/ 총 <span id="stat-total-users">0</span>명</span></p>
+            <!-- 새로고침 버튼 -->
+            <button id="btn-refresh-activities" class="px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-xs flex items-center space-x-1 transition-colors flex-shrink-0" title="활동 내역 새로고침">
+              <i class="fa-solid fa-rotate-right"></i>
+              <span class="hidden xs:inline">새로고침</span>
+            </button>
           </div>
         </div>
 
-        <div class="bg-[#161b22] p-4 rounded-xl border border-gray-800 flex items-center space-x-4">
-          <div class="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-xl">
-            <i class="fa-solid fa-circle-play"></i>
+        <!-- 초슬림 컴팩트 통계 칩 바 (화면을 차지하지 않고 1줄로 단정하게 제공) -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-xs">
+          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
+            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
+              <i class="fa-solid fa-users text-blue-400 text-[10px]"></i>
+              <span>오늘 접속</span>
+            </span>
+            <span class="font-bold text-white text-[12px]"><span id="stat-active-users">0</span><span class="text-[10px] text-gray-500 font-normal"> / <span id="stat-total-users">0</span></span></span>
           </div>
-          <div>
-            <p class="text-xs text-gray-400 font-medium">누적 시청 이벤트</p>
-            <p class="text-2xl font-black text-white" id="stat-plays">0</p>
-          </div>
-        </div>
 
-        <div class="bg-[#161b22] p-4 rounded-xl border border-gray-800 flex items-center space-x-4">
-          <div class="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center text-xl">
-            <i class="fa-solid fa-cloud-arrow-down"></i>
+          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
+            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
+              <i class="fa-solid fa-circle-play text-emerald-400 text-[10px]"></i>
+              <span>시청</span>
+            </span>
+            <span class="font-bold text-white text-[12px]" id="stat-plays">0</span>
           </div>
-          <div>
-            <p class="text-xs text-gray-400 font-medium">미디어 다운로드</p>
-            <p class="text-2xl font-black text-white" id="stat-downloads">0</p>
-          </div>
-        </div>
 
-        <div class="bg-[#161b22] p-4 rounded-xl border border-gray-800 flex items-center space-x-4">
-          <div class="w-12 h-12 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center text-xl">
-            <i class="fa-solid fa-database"></i>
+          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
+            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
+              <i class="fa-solid fa-cloud-arrow-down text-amber-400 text-[10px]"></i>
+              <span>다운로드</span>
+            </span>
+            <span class="font-bold text-white text-[12px]" id="stat-downloads">0</span>
           </div>
-          <div>
-            <p class="text-xs text-gray-400 font-medium">대시보드 보관 로그</p>
-            <p class="text-2xl font-black text-white" id="stat-events">0</p>
+
+          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
+            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
+              <i class="fa-solid fa-database text-purple-400 text-[10px]"></i>
+              <span>보관 로그</span>
+            </span>
+            <span class="font-bold text-white text-[12px]" id="stat-events">0</span>
           </div>
         </div>
-      </div>
       </div>
       <!-- 활동 타임라인: Portainer식 하단 앵커 스크롤 영역 -->
       <div class="flex-1 relative flex flex-col min-h-0 px-4 pb-4">
@@ -213,26 +233,25 @@
     <!-- 2. 가상 분할 로그 통합 뷰어 뷰 -->
     <div id="view-logs" class="flex-1 flex flex-col min-w-0 hidden h-full">
       <!-- 뷰어 상단 툴바 -->
-      <div class="bg-[#161b22] border-b border-gray-800 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 flex-shrink-0">
-        <div class="flex items-center space-x-3">
-          <div class="w-8 h-8 rounded bg-gray-800 text-plex flex items-center justify-center">
-            <i class="fa-solid fa-terminal"></i>
+      <div class="bg-[#161b22] border-b border-gray-800 px-3.5 md:px-6 py-2.5 md:py-3.5 flex flex-wrap items-center justify-between gap-2.5 md:gap-4 flex-shrink-0">
+        <div class="flex items-center space-x-2.5">
+          <div class="w-7 h-7 md:w-8 md:h-8 rounded bg-gray-800 text-plex flex items-center justify-center flex-shrink-0">
+            <i class="fa-solid fa-terminal text-xs md:text-sm"></i>
           </div>
-          <div>
-            <h2 id="log-view-title" class="text-base font-bold text-white flex items-center space-x-2">
-              <span>Plex Media Server.log</span>
-              <span id="log-split-badge" class="text-[11px] bg-plex/20 text-plex px-2 py-0.5 rounded-full">분할 6개 파일 통합</span>
+          <div class="min-w-0">
+            <h2 id="log-view-title" class="text-xs md:text-base font-bold text-white flex items-center space-x-1.5 flex-wrap">
+              <span class="truncate">Plex Media Server.log</span>
+              <span id="log-split-badge" class="text-[10px] md:text-[11px] bg-plex/20 text-plex px-1.5 py-0.5 rounded-full whitespace-nowrap">분할 통합</span>
             </h2>
-            <p id="log-view-desc" class="text-xs text-gray-400">총 244,744 줄 중 최신 로그 표시 중</p>
+            <p id="log-view-desc" class="text-[10px] md:text-xs text-gray-400 truncate">총 0 줄 중 최신 로그 표시 중</p>
           </div>
         </div>
 
         <!-- 뷰어 설정 및 제어 버튼 그룹 -->
-        <div class="flex items-center space-x-3">
+        <div class="flex items-center space-x-2 flex-wrap sm:flex-nowrap">
           <!-- 한 화면 로드 줄 수 선택 -->
-          <div class="flex items-center space-x-1.5 text-xs text-gray-400">
-            <span>로드 줄 수:</span>
-            <select id="log-limit-select" class="bg-[#0e1117] border border-gray-700 rounded px-2.5 py-1 text-xs text-gray-200 focus:outline-none focus:border-plex">
+          <div class="flex items-center space-x-1 text-xs text-gray-400">
+            <select id="log-limit-select" class="bg-[#0e1117] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-plex">
               <option value="50">50줄</option>
               <option value="100" selected>100줄</option>
               <option value="200">200줄</option>
@@ -241,21 +260,21 @@
           </div>
 
           <!-- 실시간 새로고침 토글 버튼 -->
-          <button id="btn-toggle-live" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded text-xs flex items-center space-x-1.5 transition-colors border border-gray-700">
-            <span id="live-indicator-dot" class="w-2 h-2 rounded-full bg-gray-500"></span>
-            <span id="live-toggle-text">실시간 새로고침: OFF</span>
+          <button id="btn-toggle-live" class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded text-xs flex items-center space-x-1 transition-colors border border-gray-700">
+            <span id="live-indicator-dot" class="w-1.5 h-1.5 rounded-full bg-gray-500"></span>
+            <span id="live-toggle-text">실시간: OFF</span>
           </button>
 
           <!-- 수동 새로고침 버튼 -->
-          <button id="btn-refresh-log" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded text-xs flex items-center space-x-1 transition-colors border border-gray-700" title="최신 로그 가져오기">
-            <i class="fa-solid fa-arrow-rotate-right"></i>
-            <span>수동 새로고침</span>
+          <button id="btn-refresh-log" class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded text-xs flex items-center space-x-1 transition-colors border border-gray-700" title="최신 로그 가져오기">
+            <i class="fa-solid fa-arrow-rotate-right text-[10px]"></i>
+            <span class="hidden sm:inline">새로고침</span>
           </button>
 
           <!-- 맨 아래로 스크롤 버튼 -->
-          <button id="btn-scroll-bottom" class="px-2.5 py-1 bg-plex/20 hover:bg-plex/30 text-plex rounded text-xs flex items-center space-x-1 transition-colors" title="최신 위치(맨 아래)로 이동">
-            <i class="fa-solid fa-arrow-down"></i>
-            <span>맨 아래로</span>
+          <button id="btn-scroll-bottom" class="px-2 py-1 bg-plex/20 hover:bg-plex/30 text-plex rounded text-xs flex items-center space-x-1 transition-colors" title="최신 위치(맨 아래)로 이동">
+            <i class="fa-solid fa-arrow-down text-[10px]"></i>
+            <span class="hidden sm:inline">맨 아래로</span>
           </button>
         </div>
       </div>
@@ -361,6 +380,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260920_3"></script>
+  <script src="/app.js?v=20260920_compact"></script>
 </body>
 </html>

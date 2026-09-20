@@ -69,3 +69,19 @@
   border-color: #3e485b;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
+
+/* 모바일 드로어 활성화 상태 */
+#sidebar-aside.drawer-open {
+  transform: translateX(0) !important;
+}
+
+/* 모바일 화면 터치 및 스크롤 최적화 */
+@media (max-width: 768px) {
+  .activity-card {
+    padding: 6px 8px;
+  }
+  #log-terminal {
+    font-size: 11px;
+    padding: 8px;
+  }
+}
