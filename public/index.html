@@ -83,12 +83,50 @@
       </div>
     </div>
 
+    <!-- 사이드바 서버 현황 통계 (부가 정보는 사이드바에 컴팩트하게 배치) -->
+    <div class="px-4 py-3 border-b border-gray-800/80 bg-[#12151a]/60 flex-shrink-0">
+      <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+        <span>서버 현황 요약</span>
+        <span class="text-[10px] text-gray-500 font-normal">Plex Dashboard</span>
+      </p>
+      <div class="grid grid-cols-2 gap-1.5 text-xs">
+        <div class="bg-[#161b22] border border-gray-800 rounded px-2 py-1.5 flex flex-col">
+          <span class="text-[10px] text-gray-400 flex items-center space-x-1">
+            <i class="fa-solid fa-users text-blue-400 text-[9px]"></i>
+            <span>오늘 접속</span>
+          </span>
+          <span class="font-bold text-white text-[11px] mt-0.5"><span id="stat-active-users">0</span><span class="text-[9px] text-gray-500 font-normal"> / <span id="stat-total-users">0</span></span></span>
+        </div>
+        <div class="bg-[#161b22] border border-gray-800 rounded px-2 py-1.5 flex flex-col">
+          <span class="text-[10px] text-gray-400 flex items-center space-x-1">
+            <i class="fa-solid fa-circle-play text-emerald-400 text-[9px]"></i>
+            <span>누적 시청</span>
+          </span>
+          <span class="font-bold text-white text-[11px] mt-0.5" id="stat-plays">0</span>
+        </div>
+        <div class="bg-[#161b22] border border-gray-800 rounded px-2 py-1.5 flex flex-col">
+          <span class="text-[10px] text-gray-400 flex items-center space-x-1">
+            <i class="fa-solid fa-cloud-arrow-down text-amber-400 text-[9px]"></i>
+            <span>다운로드</span>
+          </span>
+          <span class="font-bold text-white text-[11px] mt-0.5" id="stat-downloads">0</span>
+        </div>
+        <div class="bg-[#161b22] border border-gray-800 rounded px-2 py-1.5 flex flex-col">
+          <span class="text-[10px] text-gray-400 flex items-center space-x-1">
+            <i class="fa-solid fa-database text-purple-400 text-[9px]"></i>
+            <span>보관 로그</span>
+          </span>
+          <span class="font-bold text-white text-[11px] mt-0.5" id="stat-events">0</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 네비게이션 섹션 -->
-    <div class="flex-1 overflow-y-auto px-3 py-4 space-y-6 text-sm">
+    <div class="flex-1 overflow-y-auto px-3 py-3 space-y-5 text-sm">
       <!-- 주요 메뉴 -->
       <div>
-        <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">대시보드</p>
-        <button id="nav-dashboard" class="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors">
+        <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">대시보드</p>
+        <button id="nav-dashboard" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors">
           <i class="fa-solid fa-chart-pie w-5 text-center"></i>
           <span>사용자 활동 내역</span>
         </button>
@@ -96,7 +134,7 @@
 
       <!-- 메인 로그 -->
       <div>
-        <div class="flex items-center justify-between px-3 mb-2">
+        <div class="flex items-center justify-between px-3 mb-1.5">
           <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">서버 시스템 로그</p>
           <span class="text-[11px] bg-gray-800 text-gray-300 px-1.5 py-0.5 rounded">통합 뷰</span>
         </div>
@@ -137,80 +175,39 @@
 
     <!-- 1. 사용자 활동 대시보드 뷰 -->
     <div id="view-dashboard" class="flex-1 flex flex-col min-h-0">
-      <!-- 상단 컨트롤 & 컴팩트 통계 칩 바 -->
-      <div class="p-3 md:p-4 pb-2 space-y-2 flex-shrink-0">
-        <!-- 상단 헤더 & 필터 바 -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-[#161b22] px-3.5 py-2.5 rounded-xl border border-gray-800 shadow-sm">
-          <div class="flex items-center justify-between">
-            <h2 class="text-sm md:text-base font-bold text-white flex items-center space-x-2">
-              <span>Plex 사용자 활동</span>
-              <span class="text-[11px] font-medium text-gray-300 bg-gray-800 px-2 py-0.5 rounded-full" id="total-events-badge">0건</span>
-            </h2>
+      <!-- 상단 컨트롤 & 필터 바 (초슬림 단일 행: 활동 내역을 최우선으로 화면 100% 확보) -->
+      <div class="p-2.5 md:p-3.5 pb-1 flex-shrink-0">
+        <div class="flex items-center justify-between gap-2 bg-[#161b22] px-3 py-2 rounded-xl border border-gray-800 shadow-sm">
+          <!-- 좌측: 제목 및 건수 뱃지 -->
+          <div class="flex items-center space-x-1.5 flex-shrink-0">
+            <h2 class="text-xs md:text-sm font-bold text-white whitespace-nowrap">사용자 활동</h2>
+            <span class="text-[10px] font-medium text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded-full" id="total-events-badge">0건</span>
           </div>
 
-          <!-- 필터 컨트롤 그룹 (모바일에서 가로 스크롤 또는 유연한 배치) -->
-          <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-            <!-- 사용자 선택 드롭다운 -->
-            <div class="flex items-center space-x-1.5 flex-1 sm:flex-initial">
-              <select id="filter-user" class="w-full sm:w-auto bg-[#0e1117] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-plex">
-                <option value="all">전체 사용자 (모두 보기)</option>
-                <!-- JS로 채워짐 -->
-              </select>
-            </div>
+          <!-- 우측: 반응형 필터 드롭다운 & 새로고침 -->
+          <div class="flex items-center gap-1.5 min-w-0 flex-1 justify-end">
+            <!-- 사용자 필터 -->
+            <select id="filter-user" class="max-w-[130px] sm:max-w-[180px] bg-[#0e1117] border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-plex truncate">
+              <option value="all">모든 사용자</option>
+              <!-- JS로 채워짐 -->
+            </select>
 
-            <!-- 활동 유형 선택 드롭다운 -->
-            <div class="flex items-center space-x-1.5 flex-1 sm:flex-initial">
-              <select id="filter-type" class="w-full sm:w-auto bg-[#0e1117] border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-plex">
-                <option value="all">모든 활동</option>
-                <option value="PLAYING">시청 중 (진행률)</option>
-                <option value="PLAY_START">시청 시작</option>
-                <option value="PAUSE">일시정지</option>
-                <option value="STOP">시청 종료</option>
-                <option value="DOWNLOAD">미디어 다운로드</option>
-                <option value="CONNECT">서버 접속</option>
-              </select>
-            </div>
+            <!-- 활동 유형 필터 -->
+            <select id="filter-type" class="max-w-[105px] sm:max-w-[140px] bg-[#0e1117] border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-plex truncate">
+              <option value="all">모든 활동</option>
+              <option value="PLAYING">시청 중 (진행률)</option>
+              <option value="PLAY_START">시청 시작</option>
+              <option value="PAUSE">일시정지</option>
+              <option value="STOP">시청 종료</option>
+              <option value="DOWNLOAD">다운로드</option>
+              <option value="CONNECT">서버 접속</option>
+            </select>
 
             <!-- 새로고침 버튼 -->
-            <button id="btn-refresh-activities" class="px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-xs flex items-center space-x-1 transition-colors flex-shrink-0" title="활동 내역 새로고침">
-              <i class="fa-solid fa-rotate-right"></i>
-              <span class="hidden xs:inline">새로고침</span>
+            <button id="btn-refresh-activities" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-xs flex items-center space-x-1 transition-colors flex-shrink-0" title="새로고침">
+              <i class="fa-solid fa-rotate-right text-[11px]"></i>
+              <span class="hidden sm:inline">새로고침</span>
             </button>
-          </div>
-        </div>
-
-        <!-- 초슬림 컴팩트 통계 칩 바 (화면을 차지하지 않고 1줄로 단정하게 제공) -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-xs">
-          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
-            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
-              <i class="fa-solid fa-users text-blue-400 text-[10px]"></i>
-              <span>오늘 접속</span>
-            </span>
-            <span class="font-bold text-white text-[12px]"><span id="stat-active-users">0</span><span class="text-[10px] text-gray-500 font-normal"> / <span id="stat-total-users">0</span></span></span>
-          </div>
-
-          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
-            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
-              <i class="fa-solid fa-circle-play text-emerald-400 text-[10px]"></i>
-              <span>시청</span>
-            </span>
-            <span class="font-bold text-white text-[12px]" id="stat-plays">0</span>
-          </div>
-
-          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
-            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
-              <i class="fa-solid fa-cloud-arrow-down text-amber-400 text-[10px]"></i>
-              <span>다운로드</span>
-            </span>
-            <span class="font-bold text-white text-[12px]" id="stat-downloads">0</span>
-          </div>
-
-          <div class="bg-[#161b22]/90 border border-gray-800/90 rounded-lg px-2.5 py-1.5 flex items-center justify-between">
-            <span class="text-gray-400 text-[11px] flex items-center space-x-1.5">
-              <i class="fa-solid fa-database text-purple-400 text-[10px]"></i>
-              <span>보관 로그</span>
-            </span>
-            <span class="font-bold text-white text-[12px]" id="stat-events">0</span>
           </div>
         </div>
       </div>
@@ -380,6 +377,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260920_compact"></script>
+  <script src="/app.js?v=20260920_mobile_full"></script>
 </body>
 </html>

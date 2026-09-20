@@ -79,9 +79,18 @@
 @media (max-width: 768px) {
   .activity-card {
     padding: 6px 8px;
+    gap: 6px;
   }
   #log-terminal {
     font-size: 11px;
-    padding: 8px;
+    padding: 6px 8px;
+  }
+  /* 모바일에서 불필요한 큰 여백 축소 */
+  #view-dashboard .px-4 {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  #view-dashboard .pb-4 {
+    padding-bottom: 8px;
   }
 }
