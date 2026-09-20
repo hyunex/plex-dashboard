@@ -1,0 +1,71 @@
+/* 커스텀 스크롤바 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0e1117;
+}
+::-webkit-scrollbar-thumb {
+  background: #282f3d;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3e485b;
+}
+
+/* 로그 뷰어 터미널 전용 스타일 */
+#log-terminal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  background-color: #0b0e14;
+}
+
+.log-line {
+  padding: 1.5px 6px;
+  border-radius: 3px;
+  line-height: 1.45;
+  transition: background-color 0.1s ease;
+}
+
+.log-line:hover {
+  background-color: rgba(229, 160, 13, 0.08);
+}
+
+.log-time {
+  color: #64748b;
+  margin-right: 8px;
+}
+
+.log-level-INFO {
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.log-level-DEBUG {
+  color: #94a3b8;
+}
+
+.log-level-WARN {
+  color: #facc15;
+  font-weight: 600;
+}
+
+.log-level-ERROR {
+  color: #f87171;
+  font-weight: 700;
+}
+
+.log-level-VERBOSE {
+  color: #c084fc;
+}
+
+/* 활동 카드 애니메이션 */
+.activity-card {
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.activity-card:hover {
+  transform: translateY(-1px);
+  border-color: #3e485b;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}

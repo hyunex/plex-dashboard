@@ -1,0 +1,10 @@
+{
+  "name": "plex-dashboard",
+  "version": "1.0.0",
+  "description": "Plex Server User Activity Dashboard & Unified Log Viewer",
+  "main": "server.ts",
+  "scripts": {
+    "start": "bun run server.ts",
+    "dev": "bun --watch server.ts"
+  }
+}

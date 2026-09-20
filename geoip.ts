@@ -1,0 +1,96 @@
+import {
+  getUncachedIps,
+  setCachedLocation,
+  getCachedLocation,
+  db,
+} from "./database.ts";
+
+interface IpApiBatchItem {
+  query: string;
+  status: string;
+  countryCode?: string;
+  regionName?: string;
+  city?: string;
+  isp?: string;
+}
+
+export function formatLocation(item: { countryCode?: string; regionName?: string; city?: string; isp?: string }): string {
+  const parts: string[] = [];
+  if (item.countryCode) parts.push(item.countryCode);
+  const region = [item.regionName, item.city].filter(Boolean).join(" ");
+  if (region) parts.push(region);
+  let loc = parts.join(" · ");
+  if (item.isp) loc += loc ? ` (${item.isp})` : item.isp;
+  return loc;
+}
+
+/** 사설/루프백 IP 판별 (조회 제외) */
+export function isPrivateIp(ip: string): boolean {
+  if (!ip || ip === "Unknown") return true;
+  if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
+  if (/^10\./.test(ip) || /^192\.168\./.test(ip)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+  if (/^(fc|fd)[0-9a-f:]*/i.test(ip)) return true;
+  return false;
+}
+
+/** 배치 조회 (최대 100개, ip-api 무료 한도: 분당 45회 → 호출 간격은 호출부에서 조절) */
+export async function lookupIpsBatch(ips: string[]): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  const targets = [...new Set(ips)].filter((ip) => !isPrivateIp(ip));
+  if (targets.length === 0) return result;
+  const uncached = getUncachedIps(targets);
+  if (uncached.length === 0) {
+    for (const ip of targets) {
+      const loc = getCachedLocation(ip);
+      if (loc) result[ip] = loc;
+    }
+    return result;
+  }
+  try {
+    const res = await fetch("http://ip-api.com/batch?fields=status,countryCode,regionName,city,isp,query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(uncached.slice(0, 100)),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`ip-api batch failed: ${res.status}`);
+    const items = (await res.json()) as IpApiBatchItem[];
+    for (const item of items) {
+      if (item.status === "success" && item.query) {
+        const loc = formatLocation(item);
+        if (loc) {
+          setCachedLocation(item.query, loc);
+          result[item.query] = loc;
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[GeoIP] 배치 조회 실패:", err);
+  }
+  for (const ip of targets) {
+    if (!result[ip]) {
+      const loc = getCachedLocation(ip);
+      if (loc) result[ip] = loc;
+    }
+  }
+  return result;
+}
+
+/** 수집 시점: 신규 이벤트의 IP 위치를 캐시에서 즉시 메우고, 미보유분은 배치 조회 후 DB 역보정 */
+export async function backfillActivityLocations(limit = 200): Promise<number> {
+  const rows = db.query(
+    `SELECT DISTINCT client_ip FROM activity_logs
+     WHERE (ip_location IS NULL OR ip_location = '') AND client_ip IS NOT NULL AND client_ip != '' AND client_ip != 'Unknown'
+     ORDER BY id DESC LIMIT ?`
+  ).all(limit) as unknown as { client_ip: string }[];
+  const ips = rows.map((r) => r.client_ip);
+  if (ips.length === 0) return 0;
+  const locMap = await lookupIpsBatch(ips);
+  let updated = 0;
+  for (const [ip, loc] of Object.entries(locMap)) {
+    const r = db.run(`UPDATE activity_logs SET ip_location = ? WHERE (ip_location IS NULL OR ip_location = '') AND client_ip = ?`, [loc, ip]);
+    updated += r.changes as number;
+  }
+  return updated;
+}
