@@ -14,22 +14,34 @@ interface IpApiBatchItem {
   isp?: string;
 }
 
+function cleanField(val?: string): string {
+  if (!val) return "";
+  return val.replace(/[<>'"`;\\]/g, "").trim();
+}
+
 export function formatLocation(item: { countryCode?: string; regionName?: string; city?: string; isp?: string }): string {
   const parts: string[] = [];
-  if (item.countryCode) parts.push(item.countryCode);
-  const region = [item.regionName, item.city].filter(Boolean).join(" ");
+  const country = cleanField(item.countryCode);
+  const regionName = cleanField(item.regionName);
+  const city = cleanField(item.city);
+  const isp = cleanField(item.isp);
+
+  if (country) parts.push(country);
+  const region = [regionName, city].filter(Boolean).join(" ");
   if (region) parts.push(region);
   let loc = parts.join(" · ");
-  if (item.isp) loc += loc ? ` (${item.isp})` : item.isp;
+  if (isp) loc += loc ? ` (${isp})` : isp;
   return loc;
 }
 
-/** 사설/루프백 IP 판별 (조회 제외) */
+/** 사설/루프백/CGNAT/링크로컬 IP 판별 (외부 조회 제외) */
 export function isPrivateIp(ip: string): boolean {
   if (!ip || ip === "Unknown") return true;
   if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
   if (/^10\./.test(ip) || /^192\.168\./.test(ip)) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) return true; // CGNAT (RFC 6598)
+  if (/^169\.254\./.test(ip)) return true; // Link-local
   if (/^(fc|fd)[0-9a-f:]*/i.test(ip)) return true;
   return false;
 }

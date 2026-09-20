@@ -207,27 +207,29 @@ export function getActivities(options: {
 }) {
   const limit = options.limit ?? 50;
   const offset = options.offset ?? 0;
-  const conditions: string[] = [];
+  const countConditions: string[] = [];
+  const itemConditions: string[] = [];
   const params: (string | number)[] = [];
 
   if (options.user && options.user !== "all") {
-    conditions.push("user_name = ?");
+    countConditions.push("user_name = ?");
+    itemConditions.push("a.user_name = ?");
     params.push(options.user);
   }
 
   if (options.type && options.type !== "all") {
-    conditions.push("activity_type = ?");
+    countConditions.push("activity_type = ?");
+    itemConditions.push("a.activity_type = ?");
     params.push(options.type);
   }
 
   if (options.hideStream) {
-    conditions.push("(activity_type != 'DOWNLOAD' OR COALESCE(is_stream, 0) = 0)");
+    countConditions.push("(activity_type != 'DOWNLOAD' OR COALESCE(is_stream, 0) = 0)");
+    itemConditions.push("(a.activity_type != 'DOWNLOAD' OR COALESCE(a.is_stream, 0) = 0)");
   }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const itemWhere = conditions.length > 0
-    ? `WHERE ${conditions.join(" AND ").replace(/user_name/g, "a.user_name").replace(/activity_type/g, "a.activity_type")}`
-    : "";
+  const whereClause = countConditions.length > 0 ? `WHERE ${countConditions.join(" AND ")}` : "";
+  const itemWhere = itemConditions.length > 0 ? `WHERE ${itemConditions.join(" AND ")}` : "";
   const query = `
     SELECT a.*, COALESCE(u.alias, '') as alias,
       CASE WHEN COALESCE(u.alias, '') != '' THEN u.alias ELSE a.user_name END as display_name

@@ -1,4 +1,4 @@
-import { join } from "path";
+import { join, resolve } from "path";
 import { existsSync } from "fs";
 import {
   getActivities,
@@ -25,28 +25,50 @@ const importIntervalSec = parseInt(getSetting("import_interval_sec", "30"), 10);
 const collector = new LogCollector(importIntervalSec);
 collector.start();
 
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "SAMEORIGIN",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-XSS-Protection": "1; mode=block",
+};
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      ...SECURITY_HEADERS,
     },
   });
 }
 
+/** 로그 라인 내 민감 토큰 마스킹 필터 */
+function maskSensitiveLog(line: string): string {
+  return line
+    .replace(/(X-Plex-Token(?:%3D|=|\s*=>\s*))([a-zA-Z0-9_-]{8,})/gi, "$1[MASKED_TOKEN]")
+    .replace(/(token=)([a-zA-Z0-9_-]{8,})/gi, "$1[MASKED_TOKEN]")
+    .replace(/(auth token \()([a-zA-Z0-9_-]+)(\))/gi, "$1[MASKED_TOKEN]$3");
+}
+
 function serveStatic(filePath: string): Response {
-  if (!existsSync(filePath)) {
-    return new Response("Not Found", { status: 404 });
+  const resolvedPublic = resolve(PUBLIC_DIR);
+  const resolvedTarget = resolve(filePath);
+
+  // Path Traversal 방어: 대상 파일 경로가 반드시 public 디렉토리 하위여야 함
+  if (!resolvedTarget.startsWith(resolvedPublic)) {
+    return new Response("Forbidden", { status: 403, headers: SECURITY_HEADERS });
   }
-  const file = Bun.file(filePath);
+
+  if (!existsSync(resolvedTarget)) {
+    return new Response("Not Found", { status: 404, headers: SECURITY_HEADERS });
+  }
+  const file = Bun.file(resolvedTarget);
   return new Response(file, {
     headers: {
       "Cache-Control": "no-cache, no-store, must-revalidate",
       "Pragma": "no-cache",
       "Expires": "0",
+      ...SECURITY_HEADERS,
     },
   });
 }
@@ -115,8 +137,15 @@ const server = Bun.serve({
 
     // 5. 가상 분할 로그 통합 뷰어 API
     if (pathname === "/api/logs/view" && req.method === "GET") {
-      const groupId = url.searchParams.get("groupId") || "Plex Media Server";
-      const limit = parseInt(url.searchParams.get("limit") || "100", 10);
+      const rawGroupId = url.searchParams.get("groupId") || "Plex Media Server";
+      // groupId 안전 검증: 허용된 문자열만 통과
+      const groupId = rawGroupId.replace(/[^a-zA-Z0-9_.\- ]/g, "");
+      if (!groupId) {
+        return jsonResponse({ error: "유효하지 않은 groupId입니다." }, 400);
+      }
+
+      const parsedLimit = parseInt(url.searchParams.get("limit") || "100", 10);
+      const limit = Math.min(Math.max(1, isNaN(parsedLimit) ? 100 : parsedLimit), 1000);
       const beforeLineStr = url.searchParams.get("beforeLine");
       const afterLineStr = url.searchParams.get("afterLine");
 
@@ -128,6 +157,9 @@ const server = Bun.serve({
         beforeLine,
         afterLine,
       });
+
+      // 민감 토큰 마스킹 처리 후 반환
+      viewResult.lines = viewResult.lines.map(maskSensitiveLog);
       return jsonResponse(viewResult);
     }
 
@@ -152,10 +184,11 @@ const server = Bun.serve({
     if (pathname === "/api/locations" && req.method === "POST") {
       try {
         const body = (await req.json()) as { ips?: string[] };
-        const locMap = await lookupIpsBatch(body.ips ?? []);
+        const safeIps = Array.isArray(body.ips) ? body.ips.slice(0, 100) : [];
+        const locMap = await lookupIpsBatch(safeIps);
         return jsonResponse(locMap);
-      } catch (err) {
-        return jsonResponse({ error: "잘못된 요청 형식입니다." }, 400);
+      } catch {
+        return jsonResponse({ error: "위치 조회 실패" }, 400);
       }
     }
 

@@ -112,6 +112,14 @@ function bindEvents() {
   // 활동 피드 역방향 스크롤 (위로 올리면 과거 로드)
   el.activityList.addEventListener("scroll", handleActivityScroll);
 
+  // 사용자 클릭 시 필터 전환 (이벤트 위임 방식으로 XSS 원천 차단)
+  el.activityList.addEventListener("click", (e) => {
+    const target = e.target.closest(".btn-filter-user");
+    if (target && target.dataset.user) {
+      filterByUser(target.dataset.user);
+    }
+  });
+
   // 수동 동기화
   el.btnManualImport.addEventListener("click", handleManualImport);
 
@@ -440,7 +448,7 @@ function renderActivityCard(act) {
       <div class="min-w-0 flex-1 leading-snug space-y-0.5">
         <!-- 1행: 대제목 (사용자명, 배지, 시간, IP, 위치) -->
         <div class="flex items-center gap-1.5 flex-wrap">
-          <span class="font-bold text-white hover:underline cursor-pointer" onclick="filterByUser('${escapeHtml(act.user_name)}')">${escapeHtml(displayName)}</span>
+          <span class="btn-filter-user font-bold text-white hover:underline cursor-pointer" data-user="${escapeHtml(act.user_name)}">${escapeHtml(displayName)}</span>
           ${aliasTag}
           <span class="px-1.5 py-px rounded ${badgeClass} text-[10px] leading-4">${badgeText}</span>
           <span class="text-gray-500 font-mono text-[11px]">${act.timestamp}</span>
