@@ -330,9 +330,19 @@ function renderActivities() {
 }
 
 function scrollActivitiesToBottom() {
-  setTimeout(() => {
-    el.activityList.scrollTop = el.activityList.scrollHeight;
-  }, 50);
+  const doScroll = () => {
+    if (el.activityList) {
+      el.activityList.scrollTop = el.activityList.scrollHeight;
+      const lastChild = el.activityList.lastElementChild;
+      if (lastChild && typeof lastChild.scrollIntoView === "function") {
+        lastChild.scrollIntoView({ block: "end", inline: "nearest" });
+      }
+    }
+  };
+  // DOM 렌더링 즉시, 그리고 이미지나 폰트 렌더링 직후 이중 보정
+  requestAnimationFrame(doScroll);
+  setTimeout(doScroll, 80);
+  setTimeout(doScroll, 250);
 }
 
 async function handleActivityScroll() {

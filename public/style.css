@@ -85,12 +85,9 @@
     font-size: 11px;
     padding: 6px 8px;
   }
-  /* 모바일에서 불필요한 큰 여백 축소 */
-  #view-dashboard .px-4 {
-    padding-left: 8px;
-    padding-right: 8px;
-  }
-  #view-dashboard .pb-4 {
-    padding-bottom: 8px;
+  /* 모바일 하단 주소창 및 제스처 바에 의해 최신 로그가 가려지지 않도록 안전 영역 패딩 확보 */
+  #activity-list {
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 16px)) !important;
+    scroll-padding-bottom: 3rem;
   }
 }

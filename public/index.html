@@ -2,7 +2,7 @@
 <html lang="ko" class="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Plex 서버 활동 & 통합 로그 대시보드</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -24,10 +24,10 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=20260920_bottomfix">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
-<body class="bg-[#0e1117] text-gray-200 h-screen overflow-hidden flex flex-col md:flex-row font-sans antialiased">
+<body class="bg-[#0e1117] text-gray-200 h-screen h-[100dvh] overflow-hidden flex flex-col md:flex-row font-sans antialiased">
 
   <!-- 모바일 상단 탑바 (md 미만 화면에서만 노출) -->
   <header class="md:hidden flex items-center justify-between px-3.5 py-2.5 bg-[#161b22] border-b border-gray-800 z-30 flex-shrink-0">
@@ -212,20 +212,19 @@
         </div>
       </div>
       <!-- 활동 타임라인: Portainer식 하단 앵커 스크롤 영역 -->
-      <div class="flex-1 relative flex flex-col min-h-0 px-4 pb-4">
-        <div class="flex items-center justify-between px-1 pb-2 flex-shrink-0">
-          <h3 class="text-sm font-semibold text-gray-300">활동 타임라인 <span class="text-[11px] font-normal text-gray-500">(아래가 최신 · 위로 스크롤하면 과거 로드)</span></h3>
-          <span class="text-xs text-gray-500" id="activity-showing-text">목록 로드 중...</span>
+      <div class="flex-1 relative flex flex-col min-h-0 px-2.5 md:px-4 pb-2 md:pb-4">
+        <div class="flex items-center justify-between px-1 pb-1.5 flex-shrink-0">
+          <h3 class="text-xs md:text-sm font-semibold text-gray-300">활동 타임라인 <span class="text-[10px] md:text-[11px] font-normal text-gray-500">(아래가 최신 · 위로 스크롤하면 과거 로드)</span></h3>
+          <span class="text-[11px] text-gray-500" id="activity-showing-text">목록 로드 중...</span>
         </div>
-        <div id="past-activity-indicator" class="hidden absolute top-10 left-1/2 -translate-x-1/2 z-10 bg-gray-900/90 border border-gray-700 text-plex text-xs px-3 py-1 rounded-full shadow-lg items-center space-x-2">
+        <div id="past-activity-indicator" class="hidden absolute top-8 left-1/2 -translate-x-1/2 z-10 bg-gray-900/90 border border-gray-700 text-plex text-xs px-3 py-1 rounded-full shadow-lg items-center space-x-2">
           <i class="fa-solid fa-circle-notch fa-spin"></i>
           <span>과거 활동 로딩 중...</span>
         </div>
-        <div id="activity-list" class="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
+        <div id="activity-list" class="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0 pb-16 md:pb-6">
           <!-- JS로 동적 생성 -->
         </div>
       </div>
-    </div>
 
     <!-- 2. 가상 분할 로그 통합 뷰어 뷰 -->
     <div id="view-logs" class="flex-1 flex flex-col min-w-0 hidden h-full">
@@ -377,6 +376,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260920_mobile_full"></script>
+  <script src="/app.js?v=20260920_bottomfix"></script>
 </body>
 </html>
