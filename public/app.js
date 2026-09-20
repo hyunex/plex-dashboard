@@ -332,17 +332,13 @@ function renderActivities() {
 function scrollActivitiesToBottom() {
   const doScroll = () => {
     if (el.activityList) {
+      // 오직 activityList 내부 컨테이너만 맨 아래로 스크롤 (window/body 전체를 스크롤시키지 않음)
       el.activityList.scrollTop = el.activityList.scrollHeight;
-      const lastChild = el.activityList.lastElementChild;
-      if (lastChild && typeof lastChild.scrollIntoView === "function") {
-        lastChild.scrollIntoView({ block: "end", inline: "nearest" });
-      }
     }
   };
-  // DOM 렌더링 즉시, 그리고 이미지나 폰트 렌더링 직후 이중 보정
   requestAnimationFrame(doScroll);
-  setTimeout(doScroll, 80);
-  setTimeout(doScroll, 250);
+  setTimeout(doScroll, 60);
+  setTimeout(doScroll, 200);
 }
 
 async function handleActivityScroll() {

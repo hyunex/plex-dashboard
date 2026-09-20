@@ -14,6 +14,24 @@
   background: #3e485b;
 }
 
+/* 화면 전체 스크롤 방지 및 100dvh 고정 (모바일에서 주소창/노치로 인한 상단 잘림 방지) */
+html, body {
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+}
+
+/* 모바일 상단 노치 대응 (safe-area-inset-top) */
+@supports (padding-top: env(safe-area-inset-top)) {
+  header.md\:hidden {
+    padding-top: calc(0.625rem + env(safe-area-inset-top, 0px));
+  }
+}
+
 /* 로그 뷰어 터미널 전용 스타일 */
 #log-terminal {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
