@@ -92,10 +92,44 @@ const el = {
 
 // 1. 초기화
 async function init() {
+  initMeasuredViewport();
   bindEvents();
   await loadSettings();
   await refreshDashboard();
   await loadLogGroups();
+}
+
+// 실측 뷰포트: 모바일 주소창/툴바/노치 변화에 맞춰 body 높이를 px로 고정
+function initMeasuredViewport() {
+  const visibleContainer = () =>
+    state.currentView === "logs" ? el.logTerminal : el.activityList;
+  const reAnchorVisible = () => {
+    const c = visibleContainer();
+    if (c && !c.classList.contains("hidden")) anchorToBottom(c);
+  };
+  const setVh = () => {
+    const vv = window.visualViewport;
+    // visualViewport가 있으면 실제 가시 높이, 없으면 innerHeight 사용
+    const h = vv && vv.height ? vv.height : window.innerHeight;
+    document.documentElement.style.setProperty("--app-vh", `${Math.round(h)}px`);
+    // 뷰포트 높이가 바뀌면(주소창 show/hide, 회전) 현재 뷰 맨 아래를 다시 정확히 맞춤
+    requestAnimationFrame(reAnchorVisible);
+    setTimeout(reAnchorVisible, 120);
+  };
+  setVh();
+  window.addEventListener("resize", setVh);
+  window.addEventListener("orientationchange", () => setTimeout(setVh, 120));
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", setVh);
+    window.visualViewport.addEventListener("scroll", setVh);
+  }
+  window.__reAnchorVisible = reAnchorVisible;
+}
+
+// 스크롤 컨테이너를 "정확히 맨 아래"에 고정 (마지막 카드 전체 + spacer까지 보이도록)
+function anchorToBottom(container) {
+  if (!container) return;
+  container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
 }
 
 // 2. 이벤트 바인딩
@@ -191,6 +225,7 @@ function switchView(viewName) {
     stopLiveTail();
     if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
     if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
+    requestAnimationFrame(() => anchorToBottom(el.activityList));
   } else {
     el.viewDashboard.classList.add("hidden");
     el.viewLogs.classList.remove("hidden");
@@ -198,6 +233,7 @@ function switchView(viewName) {
       "w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-gray-400 hover:bg-gray-800/60 hover:text-gray-200 transition-colors";
     if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
     if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
+    requestAnimationFrame(() => anchorToBottom(el.logTerminal));
   }
 }
 // 4. 대시보드 데이터 로드
@@ -275,6 +311,7 @@ async function loadLatestActivities() {
       <div class="p-8 text-center text-gray-500 text-sm">
         <i class="fa-solid fa-circle-notch fa-spin text-plex mr-2"></i> 활동 내역을 불러오는 중입니다...
       </div>
+      <div id="activity-bottom-spacer" aria-hidden="true"></div>
     `;
 
     // API는 최신순(DESC) 반환. 화면은 "위=과거, 아래=최신"이므로 뒤집어서 누적
@@ -309,6 +346,7 @@ async function loadLatestActivities() {
           <i class="fa-solid fa-rotate-right mr-1"></i> 다시 시도
         </button>
       </div>
+      <div id="activity-bottom-spacer" aria-hidden="true"></div>
     `;
   }
 }
@@ -320,22 +358,20 @@ function renderActivities() {
         <i class="fa-regular fa-folder-open text-3xl mb-2 text-gray-600 block"></i>
         선택한 조건에 해당하는 활동 내역이 없습니다.
       </div>
+      <div id="activity-bottom-spacer" aria-hidden="true"></div>
     `;
     el.activityShowingText.innerText = `총 ${state.activityTotal.toLocaleString()}건`;
     return;
   }
-  el.activityList.innerHTML = state.activities.map((item) => renderActivityCard(item)).join("");
+  el.activityList.innerHTML = state.activities.map((item) => renderActivityCard(item)).join("") + '<div id="activity-bottom-spacer" aria-hidden="true"></div>';
   el.activityShowingText.innerText = `총 ${state.activityTotal.toLocaleString()}건 중 ${state.activities.length.toLocaleString()}건 표시 (아래가 최신)`;
   resolveLocations(state.activities);
+  // 렌더 직후 레이아웃 확정 타이밍에 정확히 맨 아래로 앵커
+  requestAnimationFrame(() => anchorToBottom(el.activityList));
 }
 
 function scrollActivitiesToBottom() {
-  const doScroll = () => {
-    if (el.activityList) {
-      // 오직 activityList 내부 컨테이너만 맨 아래로 스크롤 (window/body 전체를 스크롤시키지 않음)
-      el.activityList.scrollTop = el.activityList.scrollHeight;
-    }
-  };
+  const doScroll = () => anchorToBottom(el.activityList);
   requestAnimationFrame(doScroll);
   setTimeout(doScroll, 60);
   setTimeout(doScroll, 200);
@@ -363,7 +399,7 @@ async function handleActivityScroll() {
     if (data.items && data.items.length > 0) {
       state.activities = [...[...data.items].reverse(), ...state.activities];
       state.activityHasMorePast = state.activities.length < data.total;
-      el.activityList.innerHTML = state.activities.map((item) => renderActivityCard(item)).join("");
+      el.activityList.innerHTML = state.activities.map((item) => renderActivityCard(item)).join("") + '<div id="activity-bottom-spacer" aria-hidden="true"></div>';
       el.activityList.scrollTop = el.activityList.scrollHeight - prevHeight;
       el.activityShowingText.innerText = `총 ${data.total.toLocaleString()}건 중 ${state.activities.length.toLocaleString()}건 표시 (아래가 최신)`;
       resolveLocations(data.items);
@@ -596,6 +632,7 @@ async function loadLogViewer(groupId, scrollBottom = true) {
       <div class="p-8 text-center text-gray-500 text-sm">
         <i class="fa-solid fa-circle-notch fa-spin text-plex mr-2"></i> 통합 로그를 불러오는 중입니다...
       </div>
+      <div id="log-bottom-spacer" aria-hidden="true"></div>
     `;
 
     const params = new URLSearchParams({
@@ -630,14 +667,15 @@ async function loadLogViewer(groupId, scrollBottom = true) {
     }
   } catch (err) {
     console.error("로그 뷰어 로드 실패:", err);
-    el.logTerminal.innerHTML = `<div class="p-4 text-red-400">로그를 불러오는 데 실패했습니다.</div>`;
+    el.logTerminal.innerHTML = `<div class="p-4 text-red-400">로그를 불러오는 데 실패했습니다.</div><div id="log-bottom-spacer" aria-hidden="true"></div>`;
   }
 }
 
 // 8. 터미널 렌더링 및 구문 하이라이팅
 function renderLogTerminal(lines) {
   const html = lines.map((line) => formatLogLine(line)).join("");
-  el.logTerminal.innerHTML = html;
+  el.logTerminal.innerHTML = html + '<div id="log-bottom-spacer" aria-hidden="true"></div>';
+  requestAnimationFrame(() => anchorToBottom(el.logTerminal));
 }
 
 function formatLogLine(line) {
@@ -737,9 +775,10 @@ function stopLiveTail() {
 }
 
 function scrollTerminalToBottom() {
-  setTimeout(() => {
-    el.logTerminal.scrollTop = el.logTerminal.scrollHeight;
-  }, 50);
+  const doScroll = () => anchorToBottom(el.logTerminal);
+  requestAnimationFrame(doScroll);
+  setTimeout(doScroll, 60);
+  setTimeout(doScroll, 200);
 }
 
 // 12. 수동 즉시 동기화 버튼 핸들러

@@ -14,15 +14,41 @@
   background: #3e485b;
 }
 
-/* 화면 전체 스크롤 방지 및 100dvh 고정 (모바일에서 주소창/노치로 인한 상단 잘림 방지) */
-html, body {
+/* 실측 뷰포트 기반 레이아웃 (JS가 --app-vh를 visualViewport 실측값으로 갱신) */
+html {
   height: 100%;
-  height: 100dvh;
+}
+html, body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  position: fixed;
+  overscroll-behavior: none;
   width: 100%;
+}
+body {
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-vh, 100dvh) !important;
+  min-height: var(--app-vh, 100dvh);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+/* 스크롤 컨테이너: 바운스 전파 차단 + 하단 앵커 여유(정확한 값은 하단 spacer가 담당) */
+#activity-list,
+#log-terminal {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-padding-bottom: 24px;
+  min-height: 0;
+}
+#activity-bottom-spacer,
+#log-bottom-spacer {
+  height: calc(28px + env(safe-area-inset-bottom, 0px));
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 /* 모바일 상단 노치 대응 (safe-area-inset-top) */
@@ -103,9 +129,9 @@ html, body {
     font-size: 11px;
     padding: 6px 8px;
   }
-  /* 모바일 하단 주소창 및 제스처 바에 의해 최신 로그가 가려지지 않도록 안전 영역 패딩 확보 */
+  /* 하단 여유는 spacer div가 담당: 여기서는 과도한 고정 패딩 제거 */
   #activity-list {
-    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 16px)) !important;
-    scroll-padding-bottom: 3rem;
+    padding-bottom: 12px !important;
+    scroll-padding-bottom: 24px;
   }
 }

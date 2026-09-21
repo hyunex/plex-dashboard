@@ -24,10 +24,10 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260920_viewportlock">
+  <link rel="stylesheet" href="/style.css?v=20260921_exactbottom">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
-<body class="bg-[#0e1117] text-gray-200 h-screen h-[100dvh] overflow-hidden flex flex-col md:flex-row font-sans antialiased">
+<body class="bg-[#0e1117] text-gray-200 overflow-hidden flex flex-col md:flex-row font-sans antialiased">
 
   <!-- 모바일 상단 탑바 (md 미만 화면에서만 노출) -->
   <header class="md:hidden flex items-center justify-between px-3.5 py-2.5 bg-[#161b22] border-b border-gray-800 z-30 flex-shrink-0">
@@ -212,7 +212,7 @@
         </div>
       </div>
       <!-- 활동 타임라인: Portainer식 하단 앵커 스크롤 영역 -->
-      <div class="flex-1 relative flex flex-col min-h-0 px-2.5 md:px-4 pb-2 md:pb-4">
+      <div id="activity-scroll-wrap" class="flex-1 relative flex flex-col min-h-0 px-2.5 md:px-4 pb-2 md:pb-4">
         <div class="flex items-center justify-between px-1 pb-1.5 flex-shrink-0">
           <h3 class="text-xs md:text-sm font-semibold text-gray-300">활동 타임라인 <span class="text-[10px] md:text-[11px] font-normal text-gray-500">(아래가 최신 · 위로 스크롤하면 과거 로드)</span></h3>
           <span class="text-[11px] text-gray-500" id="activity-showing-text">목록 로드 중...</span>
@@ -221,8 +221,9 @@
           <i class="fa-solid fa-circle-notch fa-spin"></i>
           <span>과거 활동 로딩 중...</span>
         </div>
-        <div id="activity-list" class="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0 pb-16 md:pb-6">
-          <!-- JS로 동적 생성 -->
+        <div id="activity-list" class="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
+          <!-- JS로 동적 생성 (마지막 카드 뒤에는 #activity-bottom-spacer가 항상 유지됨) -->
+          <div id="activity-bottom-spacer" aria-hidden="true"></div>
         </div>
       </div>
 
@@ -285,7 +286,8 @@
 
         <!-- 로그 본문 컨테이너 -->
         <div id="log-terminal" class="flex-1 overflow-y-auto p-4 font-mono text-xs text-gray-300 whitespace-pre-wrap select-text leading-relaxed">
-          <!-- JS로 채워짐 -->
+          <!-- JS로 채워짐 (末尾 #log-bottom-spacer 항상 유지) -->
+          <div id="log-bottom-spacer" aria-hidden="true"></div>
         </div>
       </div>
     </div>
@@ -376,6 +378,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260920_viewportlock"></script>
+  <script src="/app.js?v=20260921_exactbottom"></script>
 </body>
 </html>
