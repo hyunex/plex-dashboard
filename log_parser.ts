@@ -74,10 +74,17 @@ export function parseXplex(line: string): XplexInfo {
 /** UA 문자열 → {기기명, 플랫폼, 제품} 정밀 파싱 */
 export function parseUserAgent(ua: string): { device_name: string; platform: string; product?: string } {
   const s = ua.trim();
-  // Dalvik/2.1.0 (Linux; U; Android ...; Model Build/...) → 기기 모델명, 플랫폼: Android
-  let m = s.match(/Dalvik\/[\d.]+ \(Linux; U; Android [\d.]+; ([A-Za-z0-9_-]+)/i);
-  if (m) return { device_name: m[1], platform: "Android" };
-  // Mozilla/5.0 (Windows NT ...) ... Firefox/156.0 → 기기: Firefox(PC 웹), 플랫폼: Windows
+  // Dalvik/2.1.0 (Linux; U; Android ...; SM-F976N ...)
+  let m = s.match(/Dalvik\/[\d.]+ \(Linux; U; Android [\d.]+;\s*([^)]+?)(?:\s+Build|\))/i);
+  if (m) {
+    const model = m[1].trim();
+    return { device_name: model, platform: "Android", product: "Plezy" };
+  }
+  m = s.match(/Dalvik\/[\d.]+ \(Linux; U; Android [\d.]+;\s*([A-Za-z0-9_-]+)/i);
+  if (m) return { device_name: m[1], platform: "Android", product: "Plezy" };
+  // Plezy / Dart (Flutter HTTP 스택)
+  if (/^Plezy/i.test(s)) return { device_name: "Plezy 앱", platform: "Plezy / Mobile", product: "Plezy" };
+  if (/^Dart/i.test(s)) return { device_name: "Plezy 모바일", platform: "Plezy / Mobile", product: "Plezy" };
   m = s.match(/Mozilla\/[\d.]+ \(([^;)]+)[^)]*\).*?(Firefox|Chrome|Edg|Safari|OPR)[\/ ]([\d.]+)/i);
   if (m) {
     const os = /Windows/i.test(m[1]) ? "Windows" : /Macintosh|Mac OS/i.test(m[1]) ? "macOS" : m[1];
@@ -124,11 +131,15 @@ interface RequestContext {
   duration?: number;
   partId?: string;
   titleFallback?: string;
+  threadId?: string;
+  downloadEmitted?: boolean;
   createdAt: number;
 }
 
 export class LogParser {
   private activeRequests = new Map<string, RequestContext>();
+  private activeRequestsByThread = new BoundedMap<string, RequestContext>(1000);
+  private activeRequestsByPart = new BoundedMap<string, RequestContext>(1000);
   private userIpMap = new BoundedMap<string, string>(1000);
   private deviceByClientId = new BoundedMap<string, DeviceProfile>(2000);
   private deviceByUserIp = new BoundedMap<string, DeviceProfile>(2000);
@@ -235,7 +246,8 @@ export class LogParser {
     const timeMatch = line.match(/^([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s+\d{2}:\d{2}:\d{2}\.\d{3})/);
     if (!timeMatch) return null;
     const timestamp = parsePlexTimestamp(timeMatch[1]);
-
+    const threadMatch = line.match(/\[(\d+)\]/);
+    const threadId = threadMatch?.[1];
     // F-03: Plex 공인 검증 라인을 우선 채택하고 IP 유효성 검증
     const verifiedMatch = line.match(/Using X-Forwarded-For:\s*([0-9a-fA-F:.]+)\s+as remote address/i);
     let detectedIp: string | null = null;
@@ -282,9 +294,9 @@ export class LogParser {
           device_name: profile.device_name, platform: profile.platform,
           product: profile.product, client_version: profile.client_version,
           method, url, userAgent, createdAt: Date.now(),
+          threadId,
         };
         ctx.hasRange = /Range\s*=>/i.test(line);
-
         if (url.includes("/:/timeline") || url.includes("ratingKey=")) {
           const queryStr = url.split("?")[1];
           if (queryStr) {
@@ -307,6 +319,8 @@ export class LogParser {
 
         this.backfillProfile(ctx);
         this.activeRequests.set(reqId, ctx);
+        if (threadId) this.activeRequestsByThread.set(threadId, ctx);
+        if (ctx.partId) this.activeRequestsByPart.set(ctx.partId, ctx);
         this.cleanupOldRequests();
 
         if (url.includes("/:/websockets/notifications") && userName) {
@@ -342,6 +356,33 @@ export class LogParser {
         const tr = rest.match(/reporting timeline state\s+([a-zA-Z]+),\s+progress of\s+(\d+)\/(\d+)ms.*?ratingKey=(\d+)/);
         if (tr) { ctx.state = tr[1]; ctx.time = parseInt(tr[2], 10); ctx.duration = parseInt(tr[3], 10); ctx.ratingKey = tr[4]; }
         this.backfillProfile(ctx);
+      }
+    }
+
+    // 1) 대용량 미디어 파일 다운로드 / 스트리밍 시작 감지 (Content-Length)
+    if (line.includes("Content-Length of ") && line.includes(" (of total: ")) {
+      const clMatch = line.match(/Content-Length of (.*?) is (\d+) \(of total: (\d+)\)/);
+      if (clMatch) {
+        const bytes = parseInt(clMatch[3] || clMatch[2], 10);
+        if (bytes > 5 * 1024 * 1024) {
+          const threadMatch = line.match(/\[(\d+)\]/);
+          const threadId = threadMatch?.[1];
+          let ctx = threadId ? this.activeRequestsByThread.get(threadId) : null;
+          if (!ctx) {
+            for (const c of this.activeRequestsByPart.values()) {
+              if (c.partId && !c.downloadEmitted) {
+                ctx = c;
+                break;
+              }
+            }
+          }
+          if (ctx && ctx.partId && !ctx.downloadEmitted) {
+            ctx.downloadEmitted = true;
+            this.backfillProfile(ctx);
+            const act = this.finalizeRequestEvent(ctx, bytes, timestamp);
+            if (act) return act;
+          }
+        }
       }
     }
 
