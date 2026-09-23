@@ -428,6 +428,8 @@ export function getTop10PlayedContent(): TopContentItem[] {
 }
 
 // 4. 이번 달 사용자별 추정 데이터 사용량 (Per-user estimated data consumption this calendar month)
+export type UserConsumptionRange = "1h" | "1d" | "1m" | "1y" | "all";
+
 export interface UserMonthlyDataConsumption {
   rank: number;
   account_id: number | null;
@@ -443,8 +445,9 @@ export interface UserMonthlyDataConsumption {
   percentage: number; // 전체 사용량 대비 점유율
 }
 
-export interface MonthlyConsumptionResult {
-  month_label: string; // e.g. "2026년 9월"
+export interface UserConsumptionResult {
+  range: UserConsumptionRange;
+  range_label: string; // e.g. "최근 1시간", "최근 1일", "최근 1달", "최근 1년", "전체 기간"
   summary: {
     total_bytes: number;
     total_bytes_formatted: string;
@@ -458,16 +461,56 @@ export interface MonthlyConsumptionResult {
   users: UserMonthlyDataConsumption[];
 }
 
-export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const monthLabel = `${year}년 ${month}월`;
+export type MonthlyConsumptionResult = UserConsumptionResult;
 
+export function getMonthlyUserConsumption(): UserConsumptionResult {
+  return getUserDataConsumption("1m");
+}
+
+export function getUserDataConsumption(rawRange: string = "1m"): UserConsumptionResult {
+  const validRanges: UserConsumptionRange[] = ["1h", "1d", "1m", "1y", "all"];
+  const range: UserConsumptionRange = validRanges.includes(rawRange as UserConsumptionRange)
+    ? (rawRange as UserConsumptionRange)
+    : "1m";
+
+  const nowSec = Math.floor(Date.now() / 1000);
   const aliases = getAliases();
 
+  let rangeLabel = "최근 1달 (30일)";
+  let timespan = 4;
+  let minEpoch: number | null = nowSec - 30 * 86400;
+  let fallbackInterval: string | null = "-30 days";
+
+  if (range === "1h") {
+    rangeLabel = "최근 1시간";
+    timespan = 4;
+    minEpoch = nowSec - 3600;
+    fallbackInterval = "-1 hour";
+  } else if (range === "1d") {
+    rangeLabel = "최근 1일 (24시간)";
+    timespan = 4;
+    minEpoch = nowSec - 86400;
+    fallbackInterval = "-24 hours";
+  } else if (range === "1m") {
+    rangeLabel = "최근 1달 (30일)";
+    timespan = 4;
+    minEpoch = nowSec - 30 * 86400;
+    fallbackInterval = "-30 days";
+  } else if (range === "1y") {
+    rangeLabel = "최근 1년 (365일)";
+    timespan = 3;
+    minEpoch = nowSec - 365 * 86400;
+    fallbackInterval = "-365 days";
+  } else if (range === "all") {
+    rangeLabel = "전체 기간 (누적)";
+    timespan = 3;
+    minEpoch = null;
+    fallbackInterval = null;
+  }
+
   if (!plexDb) {
-    // 폴백: activity_logs에서 이번 달 집계
+    const whereClause = fallbackInterval ? "WHERE timestamp >= datetime('now', 'localtime', ?)" : "";
+    const params = fallbackInterval ? [fallbackInterval] : [];
     const rows = db.query(`
       SELECT
         user_name,
@@ -475,15 +518,14 @@ export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
         SUM(CASE WHEN client_ip LIKE '192.168.%' OR client_ip LIKE '172.%' OR client_ip LIKE '10.%' OR client_ip LIKE '127.%' THEN file_size_bytes ELSE 0 END) as lan_bytes,
         SUM(CASE WHEN client_ip NOT LIKE '192.168.%' AND client_ip NOT LIKE '172.%' AND client_ip NOT LIKE '10.%' AND client_ip NOT LIKE '127.%' THEN file_size_bytes ELSE 0 END) as wan_bytes
       FROM activity_logs
-      WHERE timestamp >= date('now', 'start of month')
+      ${whereClause}
       GROUP BY user_name
       ORDER BY total_bytes DESC
-    `).all() as Array<{ user_name: string; total_bytes: number; lan_bytes: number; wan_bytes: number }>;
+    `).all(...params) as Array<{ user_name: string; total_bytes: number; lan_bytes: number; wan_bytes: number }>;
 
     let allTotal = 0;
     let allLan = 0;
     let allWan = 0;
-
     for (const r of rows) {
       allTotal += r.total_bytes;
       allLan += r.lan_bytes;
@@ -513,7 +555,8 @@ export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
     const avg = users.length > 0 ? formatBytes(Math.round(allTotal / users.length)) : "0 B";
 
     return {
-      month_label: monthLabel,
+      range,
+      range_label: rangeLabel,
       summary: {
         total_bytes: allTotal,
         total_bytes_formatted: formatBytes(allTotal),
@@ -529,9 +572,8 @@ export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
   }
 
   try {
-    // 이번 달 1일 00:00:00 (KST 기준) -> UTC 초
-    const startOfMonthLocal = new Date(year, now.getMonth(), 1, 0, 0, 0, 0);
-    const startOfMonthEpoch = Math.floor(startOfMonthLocal.getTime() / 1000);
+    const whereClause = minEpoch !== null ? "WHERE b.timespan = ? AND b.at >= ?" : "WHERE b.timespan = ?";
+    const params = minEpoch !== null ? [timespan, minEpoch] : [timespan];
 
     const rows = plexDb.query(`
       SELECT
@@ -542,10 +584,10 @@ export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
         SUM(CASE WHEN b.lan = 0 THEN b.bytes ELSE 0 END) as wan_bytes
       FROM statistics_bandwidth b
       LEFT JOIN accounts a ON a.id = b.account_id
-      WHERE b.timespan = 4 AND b.at >= ?
+      ${whereClause}
       GROUP BY b.account_id
       ORDER BY total_bytes DESC;
-    `).all(startOfMonthEpoch) as Array<{
+    `).all(...params) as Array<{
       account_id: number;
       user_name: string;
       total_bytes: number;
@@ -586,7 +628,8 @@ export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
     const avg = users.length > 0 ? formatBytes(Math.round(allTotal / users.length)) : "0 B";
 
     return {
-      month_label: monthLabel,
+      range,
+      range_label: rangeLabel,
       summary: {
         total_bytes: allTotal,
         total_bytes_formatted: formatBytes(allTotal),
@@ -600,9 +643,10 @@ export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
       users,
     };
   } catch (err) {
-    console.error("[Analytics] 월간 사용자 대역폭 조회 오류:", err);
+    console.error(`[Analytics] 사용자 대역폭(${range}) 조회 오류:`, err);
     return {
-      month_label: monthLabel,
+      range,
+      range_label: rangeLabel,
       summary: {
         total_bytes: 0,
         total_bytes_formatted: "0 B",

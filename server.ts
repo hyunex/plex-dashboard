@@ -15,6 +15,7 @@ import {
   getPeakHours,
   getTop10PlayedContent,
   getMonthlyUserConsumption,
+  getUserDataConsumption,
 } from "./analytics.ts";
 import {
   getAvailableLogGroups,
@@ -156,9 +157,10 @@ const server = Bun.serve({
       return jsonResponse(data);
     }
 
-    // 3-4. 이번 달 사용자별 추정 데이터 사용량 API
-    if (pathname === "/api/analytics/monthly-users" && req.method === "GET") {
-      const data = getMonthlyUserConsumption();
+    // 3-4. 사용자별 추정 데이터 사용량 API (1h / 1d / 1m / 1y / all)
+    if ((pathname === "/api/analytics/user-consumption" || pathname === "/api/analytics/monthly-users") && req.method === "GET") {
+      const userRange = url.searchParams.get("range") || "1m";
+      const data = getUserDataConsumption(userRange);
       return jsonResponse(data);
     }
 
@@ -168,11 +170,12 @@ const server = Bun.serve({
       const range = (rawRange === "3h" || rawRange === "6h" || rawRange === "24h") ? rawRange : "1h";
       const rawSource = url.searchParams.get("source");
       const source = rawSource === "views30d" ? "views30d" : "activity";
+      const rawUserRange = url.searchParams.get("userRange") || "1m";
       return jsonResponse({
         bandwidth: getBandwidthHistory(range),
         peakHours: getPeakHours(source),
         topContent: getTop10PlayedContent(),
-        monthlyUsers: getMonthlyUserConsumption(),
+        monthlyUsers: getUserDataConsumption(rawUserRange),
       });
     }
 

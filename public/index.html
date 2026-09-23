@@ -24,7 +24,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260923_nestingfixed">
+  <link rel="stylesheet" href="/style.css?v=20260923_userrange">
   <script src="/chart.umd.min.js"></script>
   <script>
     if (typeof Chart === "undefined") {
@@ -427,25 +427,33 @@
           </div>
         </div>
 
-        <!-- 3. 이번 달 사용자별 추정 데이터 사용량 -->
+        <!-- 3. 사용자별 추정 데이터 사용량 -->
         <div class="bg-[#161b22] border border-gray-800 rounded-xl p-3.5 md:p-5 shadow-lg space-y-4">
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-gray-800/80">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-gray-800/80">
             <div class="flex items-center space-x-2">
               <i class="fa-solid fa-hard-drive text-indigo-400 text-sm"></i>
               <div>
-                <h3 class="text-xs md:text-sm font-bold text-white">이번 달 사용자별 추정 데이터 소비량</h3>
-                <p class="text-[10px] text-gray-400">Plex 통계 기반 이번 달(1일~현재) 네트워크 전송량 추정치</p>
+                <h3 class="text-xs md:text-sm font-bold text-white">사용자별 추정 데이터 소비량</h3>
+                <p class="text-[10px] text-gray-400">Plex 통계 기반 네트워크 전송량 추정치</p>
               </div>
             </div>
-            <div class="text-right">
-              <span id="monthly-label-badge" class="text-xs font-semibold text-plex bg-plex/10 px-2 py-0.5 rounded border border-plex/20">2026년 9월</span>
+            <!-- 기간 선택 버튼 (1시간 / 1일 / 1달 / 1년 / 전체) -->
+            <div class="flex items-center space-x-2 flex-wrap gap-y-1">
+              <div class="inline-flex rounded-lg bg-[#0e1117] p-0.5 border border-gray-700/80" id="user-consumption-range-selector">
+                <button data-range="1h" class="user-range-btn px-2 py-0.5 text-xs rounded-md font-medium transition-colors text-gray-400 hover:text-white">1시간</button>
+                <button data-range="1d" class="user-range-btn px-2 py-0.5 text-xs rounded-md font-medium transition-colors text-gray-400 hover:text-white">1일</button>
+                <button data-range="1m" class="user-range-btn px-2 py-0.5 text-xs rounded-md font-semibold transition-colors bg-plex text-black">1달</button>
+                <button data-range="1y" class="user-range-btn px-2 py-0.5 text-xs rounded-md font-medium transition-colors text-gray-400 hover:text-white">1년</button>
+                <button data-range="all" class="user-range-btn px-2 py-0.5 text-xs rounded-md font-medium transition-colors text-gray-400 hover:text-white">전체</button>
+              </div>
+              <span id="monthly-label-badge" class="text-xs font-semibold text-plex bg-plex/10 px-2 py-0.5 rounded border border-plex/20 whitespace-nowrap">최근 1달 (30일)</span>
             </div>
           </div>
 
-          <!-- 월간 총 데이터 사용량 요약 지표 카드 3개 -->
+          <!-- 기간 총 데이터 사용량 요약 지표 카드 3개 -->
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
             <div class="bg-[#0e1117] border border-gray-800/80 rounded-lg p-3">
-              <span class="text-[10px] text-gray-400 block mb-0.5">이번 달 총 데이터 전송량</span>
+              <span class="text-[10px] text-gray-400 block mb-0.5" id="consumption-total-title">선택 기간 총 데이터 전송량</span>
               <span id="monthly-total-bytes" class="text-base md:text-lg font-bold text-white font-mono">0 B</span>
             </div>
             <div class="bg-[#0e1117] border border-gray-800/80 rounded-lg p-3">
@@ -564,6 +572,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260923_nestingfixed"></script>
+  <script src="/app.js?v=20260923_userrange"></script>
 </body>
 </html>

@@ -29,6 +29,7 @@ const state = {
   analytics: {
     bandwidthRange: "1h",
     peakSource: "activity",
+    userRange: "1m",
     bandwidthChart: null,
     peakHoursChart: null,
     isLoading: false,
@@ -119,6 +120,7 @@ const el = {
   monthlyActiveUsers: document.getElementById("monthly-active-users"),
   monthlyAvgUser: document.getElementById("monthly-avg-user"),
   monthlyUsersList: document.getElementById("monthly-users-list"),
+  userConsumptionRangeSelector: document.getElementById("user-consumption-range-selector"),
 };
 
 // 1. 초기화
@@ -281,6 +283,18 @@ function bindEvents() {
         state.analytics.peakSource = src;
         updatePeakSourceButtons();
         loadPeakHoursData();
+      }
+    });
+  }
+  if (el.userConsumptionRangeSelector) {
+    el.userConsumptionRangeSelector.addEventListener("click", (e) => {
+      const btn = e.target.closest(".user-range-btn");
+      if (!btn) return;
+      const range = btn.dataset.range;
+      if (range && range !== state.analytics.userRange) {
+        state.analytics.userRange = range;
+        updateUserConsumptionRangeButtons();
+        loadUserConsumptionData();
       }
     });
   }
@@ -1090,14 +1104,13 @@ async function loadAnalytics(isRefresh = false) {
   if (isRefresh && refreshBtn) {
     refreshBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> <span class="hidden sm:inline">로딩 중...</span>`;
   }
-
   try {
     const range = state.analytics.bandwidthRange || "1h";
     const source = state.analytics.peakSource || "activity";
-    const res = await fetch(`/api/analytics/all?range=${range}&source=${source}`);
+    const userRange = state.analytics.userRange || "1m";
+    const res = await fetch(`/api/analytics/all?range=${range}&source=${source}&userRange=${userRange}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-
     if (data.bandwidth) {
       try {
         renderBandwidthChart(data.bandwidth);
@@ -1158,6 +1171,30 @@ async function loadPeakHoursData() {
   } catch (err) {
     console.error("피크 시간대 데이터 갱신 실패:", err);
   }
+}
+async function loadUserConsumptionData() {
+  try {
+    const range = state.analytics.userRange || "1m";
+    const res = await fetch(`/api/analytics/user-consumption?range=${range}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderMonthlyUsers(data);
+  } catch (err) {
+    console.error("사용자 데이터 소비량 갱신 실패:", err);
+  }
+}
+
+function updateUserConsumptionRangeButtons() {
+  const selector = el.userConsumptionRangeSelector || document.getElementById("user-consumption-range-selector");
+  if (!selector) return;
+  const btns = selector.querySelectorAll(".user-range-btn");
+  btns.forEach((b) => {
+    if (b.dataset.range === state.analytics.userRange) {
+      b.className = "user-range-btn px-2 py-0.5 text-xs rounded-md font-semibold transition-colors bg-plex text-black";
+    } else {
+      b.className = "user-range-btn px-2 py-0.5 text-xs rounded-md font-medium transition-colors text-gray-400 hover:text-white";
+    }
+  });
 }
 
 function updateBandwidthRangeButtons() {
@@ -1492,19 +1529,24 @@ function renderMonthlyUsers(data) {
   const avg = el.monthlyAvgUser || document.getElementById("monthly-avg-user");
   const container = el.monthlyUsersList || document.getElementById("monthly-users-list");
 
-  if (lbl) lbl.innerText = data.month_label;
+  if (lbl) lbl.innerText = data.range_label || data.month_label;
   if (tot) tot.innerText = data.summary.total_bytes_formatted;
   if (wan) wan.innerText = data.summary.wan_bytes_formatted;
   if (lan) lan.innerText = data.summary.lan_bytes_formatted;
   if (usr) usr.innerText = `${data.summary.active_users}명`;
   if (avg) avg.innerText = data.summary.avg_per_user;
 
+  const totTitle = document.getElementById("consumption-total-title");
+  if (totTitle) {
+    totTitle.innerText = `${data.range_label || "선택 기간"} 총 데이터 전송량`;
+  }
+
   if (!container) return;
 
   if (data.users.length === 0) {
     el.monthlyUsersList.innerHTML = `
       <div class="p-8 text-center text-gray-500 text-xs">
-        이번 달 데이터 전송 통계가 없습니다.
+        선택한 기간 동안 데이터 전송 통계가 없습니다.
       </div>
     `;
     return;
