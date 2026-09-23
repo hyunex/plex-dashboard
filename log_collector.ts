@@ -143,6 +143,14 @@ export function getAvailableLogGroups(): LogGroupInfo[] {
   return result;
 }
 
+interface FileLineMeta {
+  path: string;
+  mtime: number;
+  size: number;
+  lineCount: number;
+}
+const fileMetaCache = new Map<string, FileLineMeta>();
+
 // 2. 가상 분할 로그 통합 뷰어 읽기 엔진
 export interface LogViewResult {
   lines: string[];
@@ -178,53 +186,79 @@ export async function readUnifiedLogLines(
     };
   }
 
-  // 파일들의 내용을 시간순으로 연결한 라인 인덱싱
-  // 성능 최적화: 파일들을 순서대로 읽되, Bun.file의 텍스트를 스트림 처리
-  const fileLineBlocks: string[][] = [];
+  // 파일별 라인 메타데이터 인덱싱 및 캐시 (F-04 성능 최적화: 불변 과거 파일은 재스캔 방지)
+  const fileRanges: Array<{ path: string; start: number; end: number; lineCount: number }> = [];
+  let runningTotal = 0;
+
   for (const filePath of group.files) {
     if (existsSync(filePath)) {
-      const file = Bun.file(filePath);
-      const text = await file.text();
-      const lines = text.split("\n");
-      // 마지막 줄이 빈 줄인 경우 제거
-      if (lines.length > 0 && lines[lines.length - 1] === "") {
-        lines.pop();
+      let lineCount = 0;
+      try {
+        const st = statSync(filePath);
+        const cached = fileMetaCache.get(filePath);
+        if (cached && cached.mtime === st.mtimeMs && cached.size === st.size) {
+          lineCount = cached.lineCount;
+        } else {
+          const text = await Bun.file(filePath).text();
+          let count = 0;
+          for (let i = 0; i < text.length; i++) {
+            if (text.charCodeAt(i) === 10) count++;
+          }
+          if (text.length > 0 && text.charCodeAt(text.length - 1) !== 10) {
+            count++;
+          }
+          lineCount = count;
+          fileMetaCache.set(filePath, { path: filePath, mtime: st.mtimeMs, size: st.size, lineCount });
+        }
+      } catch {
+        lineCount = 0;
       }
-      fileLineBlocks.push(lines);
+      fileRanges.push({
+        path: filePath,
+        start: runningTotal,
+        end: runningTotal + lineCount,
+        lineCount,
+      });
+      runningTotal += lineCount;
     }
   }
 
-  // 하나의 가상 플랫 라인 배열 구성
-  const allLines: string[] = [];
-  for (const block of fileLineBlocks) {
-    for (let i = 0; i < block.length; i++) {
-      allLines.push(block[i]);
-    }
-  }
-
-  const totalLines = allLines.length;
+  const totalLines = runningTotal;
   let fromLine = 0;
   let toLine = 0;
 
   if (options.beforeLine !== undefined) {
-    // 과거 로그 로딩: beforeLine 바로 앞부터 위로 limit 줄
     toLine = Math.min(Math.max(0, options.beforeLine), totalLines);
     fromLine = Math.max(0, toLine - limit);
   } else if (options.afterLine !== undefined) {
-    // 최신 로그 갱신: afterLine 이후로 limit 줄
     fromLine = Math.min(Math.max(0, options.afterLine), totalLines);
     toLine = Math.min(fromLine + limit, totalLines);
   } else {
-    // 기본값: 항상 최신 로그가 맨 아래! 끝에서 limit줄
     fromLine = Math.max(0, totalLines - limit);
     toLine = totalLines;
   }
 
-  const lines = allLines.slice(fromLine, toLine);
+  // 요청된 [fromLine, toLine) 구간과 겹치는 파일만 선별적으로 로드 (나머지 파일 I/O 배제)
+  const lines: string[] = [];
+  for (const fr of fileRanges) {
+    if (fr.end <= fromLine || fr.start >= toLine) continue;
+    try {
+      const text = await Bun.file(fr.path).text();
+      const fileLines = text.split("\n");
+      if (fileLines.length > 0 && fileLines[fileLines.length - 1] === "") {
+        fileLines.pop();
+      }
+      const localStart = Math.max(0, fromLine - fr.start);
+      const localEnd = Math.min(fileLines.length, toLine - fr.start);
+      for (let i = localStart; i < localEnd; i++) {
+        lines.push(fileLines[i]);
+      }
+    } catch {}
+  }
+
   const isBottom = toLine >= totalLines;
   const hasMorePast = fromLine > 0;
   const hasMoreFuture = toLine < totalLines;
-
   return {
     lines,
     totalLines,

@@ -39,16 +39,23 @@ export function initDatabase() {
       is_stream INTEGER DEFAULT 0
     );
   `);
-  // 기존 DB 무중단 마이그레이션
-  const cols = db.query(`PRAGMA table_info(activity_logs)`).all() as unknown as { name: string }[];
-  const colNames = new Set(cols.map((c) => c.name));
-  const alter = (sql: string) => { try { db.run(sql); } catch { /* 이미 존재 */ } };
-  if (!colNames.has("client_id")) alter(`ALTER TABLE activity_logs ADD COLUMN client_id TEXT`);
-  if (!colNames.has("product")) alter(`ALTER TABLE activity_logs ADD COLUMN product TEXT`);
-  if (!colNames.has("client_version")) alter(`ALTER TABLE activity_logs ADD COLUMN client_version TEXT`);
-  if (!colNames.has("ip_location")) alter(`ALTER TABLE activity_logs ADD COLUMN ip_location TEXT`);
-  if (!colNames.has("is_stream")) alter(`ALTER TABLE activity_logs ADD COLUMN is_stream INTEGER DEFAULT 0`);
-
+  // PRAGMA user_version 기반 버전 관리 마이그레이션 (F-18)
+  const versionRow = db.query("PRAGMA user_version;").get() as { user_version: number } | null;
+  const userVer = versionRow?.user_version ?? 0;
+  if (userVer < 1) {
+    try {
+      const cols = db.query(`PRAGMA table_info(activity_logs)`).all() as unknown as { name: string }[];
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has("client_id")) db.run(`ALTER TABLE activity_logs ADD COLUMN client_id TEXT`);
+      if (!colNames.has("product")) db.run(`ALTER TABLE activity_logs ADD COLUMN product TEXT`);
+      if (!colNames.has("client_version")) db.run(`ALTER TABLE activity_logs ADD COLUMN client_version TEXT`);
+      if (!colNames.has("ip_location")) db.run(`ALTER TABLE activity_logs ADD COLUMN ip_location TEXT`);
+      if (!colNames.has("is_stream")) db.run(`ALTER TABLE activity_logs ADD COLUMN is_stream INTEGER DEFAULT 0`);
+      db.run("PRAGMA user_version = 1;");
+    } catch (err) {
+      console.error("[Database] 마이그레이션 v1 실행 오류:", err);
+    }
+  }
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity_logs(timestamp DESC);
   `);
@@ -287,7 +294,8 @@ export function setAlias(userName: string, alias: string) {
   db.query(`INSERT OR REPLACE INTO user_aliases (user_name, alias) VALUES (?, ?)`).run(userName, clean);
  }
 export function getDashboardStats(): StatsResult {
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const stats = db.query(`
     SELECT
       COUNT(DISTINCT user_name) as total_users,

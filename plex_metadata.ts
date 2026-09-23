@@ -1,17 +1,5 @@
-import { Database } from "bun:sqlite";
-
-const PLEX_DB_PATH =
-  process.env.PLEX_DB_PATH ||
-  "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db";
-
-let plexDb: Database | null = null;
-
-try {
-  plexDb = new Database(PLEX_DB_PATH, { readonly: true });
-} catch (err) {
-  console.warn("Plex SQLite DB 연결 불가 (읽기 전용):", err);
-}
-
+import { plexDb } from "./plex_db.ts";
+import { BoundedMap } from "./bounded_map.ts";
 export interface MediaMetadata {
   rating_key: string;
   media_type: "episode" | "movie" | "track" | "other";
@@ -23,8 +11,8 @@ export interface MediaMetadata {
   media_title: string;
 }
 
-const metadataCache = new Map<string, MediaMetadata>();
-const partIdCache = new Map<string, string>(); // partId -> ratingKey
+const metadataCache = new BoundedMap<string, MediaMetadata>(3000);
+const partIdCache = new BoundedMap<string, string>(3000); // partId -> ratingKey
 
 export function resolveMediaByRatingKey(
   ratingKey: number | string,

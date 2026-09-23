@@ -1,19 +1,5 @@
-import { Database } from "bun:sqlite";
-import { join } from "path";
 import { db, getAliases } from "./database.ts";
-
-const PLEX_DB_PATH =
-  process.env.PLEX_DB_PATH ||
-  "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db";
-
-let plexDb: Database | null = null;
-try {
-  plexDb = new Database(PLEX_DB_PATH, { readonly: true });
-  plexDb.run("PRAGMA query_only = ON;");
-} catch (err) {
-  console.warn("[Analytics] Plex SQLite DB 연결 실패 (읽기 전용):", err);
-}
-
+import { plexDb } from "./plex_db.ts";
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -217,10 +203,18 @@ export interface PeakHoursResult {
   hours: PeakHourItem[];
 }
 
+// 피크 시간대 결과 TTL 캐시 (60초)
+let cachedPeakHours: { [key: string]: { timestamp: number; data: PeakHoursResult } } = {};
+
 export function getPeakHours(source: "activity" | "views30d" = "activity"): PeakHoursResult {
-  const hourMap: Map<number, { total: number; plays: number; users: Set<string>; bytes: number }> = new Map();
+  const now = Date.now();
+  if (cachedPeakHours[source] && now - cachedPeakHours[source].timestamp < 60000) {
+    return cachedPeakHours[source].data;
+  }
+
+  const hourMap: Map<number, { total: number; plays: number; userCount: number; bytes: number }> = new Map();
   for (let h = 0; h < 24; h++) {
-    hourMap.set(h, { total: 0, plays: 0, users: new Set(), bytes: 0 });
+    hourMap.set(h, { total: 0, plays: 0, userCount: 0, bytes: 0 });
   }
 
   let totalSamples = 0;
@@ -242,6 +236,7 @@ export function getPeakHours(source: "activity" | "views30d" = "activity"): Peak
         if (item) {
           item.total += r.cnt;
           item.plays += r.cnt;
+          item.userCount = r.users;
           totalSamples += r.cnt;
         }
       }
@@ -249,30 +244,29 @@ export function getPeakHours(source: "activity" | "views30d" = "activity"): Peak
       console.error("[Analytics] 30일 시청 기록 피크 조회 실패:", err);
     }
   } else {
-    // 기본값: 대시보드 activity_logs 기준
+    // 기본값: SQL GROUP BY로 SQLite 엔진에서 집계 (F-05 성능 최적화)
     const rows = db.query(`
       SELECT
         CAST(strftime('%H', timestamp) AS INTEGER) as hour,
-        user_name,
-        activity_type,
-        file_size_bytes
+        COUNT(*) as total_count,
+        SUM(CASE WHEN activity_type LIKE 'PLAY%' THEN 1 ELSE 0 END) as play_count,
+        COUNT(DISTINCT user_name) as user_count,
+        COALESCE(SUM(file_size_bytes), 0) as total_bytes
       FROM activity_logs
-    `).all() as Array<{ hour: number; user_name: string; activity_type: string; file_size_bytes: number }>;
+      GROUP BY hour
+    `).all() as Array<{ hour: number; total_count: number; play_count: number; user_count: number; total_bytes: number }>;
 
     for (const r of rows) {
       const item = hourMap.get(r.hour);
       if (item) {
-        item.total++;
-        if (r.activity_type.startsWith("PLAY")) {
-          item.plays++;
-        }
-        item.users.add(r.user_name);
-        item.bytes += r.file_size_bytes;
-        totalSamples++;
+        item.total = r.total_count;
+        item.plays = r.play_count;
+        item.userCount = r.user_count;
+        item.bytes = r.total_bytes;
+        totalSamples += r.total_count;
       }
     }
   }
-
   // 상위 피크 시간대 판정
   const sortedByTotal = [...hourMap.entries()].sort((a, b) => b[1].total - a[1].total);
   const peakHour = sortedByTotal[0]?.[0] ?? 20;
@@ -305,7 +299,7 @@ export function getPeakHours(source: "activity" | "views30d" = "activity"): Peak
       hour_label: `${String(h).padStart(2, "0")}시`,
       total_count: data.total,
       play_count: data.plays,
-      user_count: data.users.size,
+      user_count: data.userCount,
       total_bytes: data.bytes,
       total_bytes_formatted: formatBytes(data.bytes),
       is_peak: top3Hours.has(h),
@@ -313,8 +307,7 @@ export function getPeakHours(source: "activity" | "views30d" = "activity"): Peak
   }
 
   const formatWindow = (start: number) => `${String(start).padStart(2, "0")}시 ~ ${String((start + 3) % 24).padStart(2, "0")}시`;
-
-  return {
+  const result: PeakHoursResult = {
     source,
     summary: {
       peak_hour: peakHour,
@@ -326,6 +319,8 @@ export function getPeakHours(source: "activity" | "views30d" = "activity"): Peak
     },
     hours,
   };
+  cachedPeakHours[source] = { timestamp: now, data: result };
+  return result;
 }
 
 // Plex 서버 머신 식별자 및 공식 웹 URL 헬퍼
@@ -465,8 +460,13 @@ export interface TopContentItem {
   plex_url: string | null;
   percentage: number; // 1위 대비 비율 (0 ~ 100)
 }
+let cachedTop10: { timestamp: number; data: TopContentItem[] } | null = null;
 
 export function getTop10PlayedContent(): TopContentItem[] {
+  const now = Date.now();
+  if (cachedTop10 && now - cachedTop10.timestamp < 180000) {
+    return cachedTop10.data;
+  }
   if (!plexDb) {
     // 폴백: activity_logs에서 집계
     const rows = db.query(`
@@ -544,14 +544,13 @@ export function getTop10PlayedContent(): TopContentItem[] {
 
     const maxCount = rows[0]?.play_count || 1;
 
-    return rows.map((r, idx) => {
+    const result = rows.map((r, idx) => {
       let typeLabel = "기타";
       if (r.metadata_type === 1) typeLabel = "영화";
       else if (r.metadata_type === 4 || r.metadata_type === 2) typeLabel = "드라마/시리즈";
       else if (r.metadata_type === 8 || r.metadata_type === 9 || r.metadata_type === 10) typeLabel = "음악";
 
       let thumb = r.poster_url;
-      // 외부 HTTP가 없더라도 rating_key가 있으면 로컬 프록시 API 사용
       if (!thumb && r.rating_key) {
         thumb = `/api/poster?ratingKey=${r.rating_key}`;
       }
@@ -570,6 +569,8 @@ export function getTop10PlayedContent(): TopContentItem[] {
         percentage: Math.round((r.play_count / maxCount) * 100),
       };
     });
+    cachedTop10 = { timestamp: now, data: result };
+    return result;
   } catch (err) {
     console.error("[Analytics] 최근 30일 Top 10 조회 오류:", err);
     return [];

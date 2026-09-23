@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { resolveMediaByRatingKey, resolveMediaByPartId } from "./plex_metadata.ts";
-import type { ActivityInsert } from "./database.ts";
+import { type ActivityInsert, saveDeviceProfile, getDeviceProfile } from "./database.ts";
+import { BoundedMap } from "./bounded_map.ts";
 
 const MONTH_MAP: Record<string, string> = {
   Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
@@ -29,6 +30,20 @@ export function formatDuration(ms: number): string {
   if (h > 0) return `${h}시간 ${m}분 ${sec}초`;
   if (m > 0) return `${m}분 ${sec}초`;
   return `${sec}초`;
+}
+
+function isValidIp(ip: string): boolean {
+  if (!ip) return false;
+  return /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(ip) ||
+    /^[0-9a-fA-F:]+$/.test(ip);
+}
+
+function isPrivateOrProxyIp(ip: string): boolean {
+  if (!ip) return false;
+  const clean = ip.replace("::ffff:", "").trim();
+  return clean === "127.0.0.1" || clean === "::1" || clean === "localhost" ||
+    /^10\./.test(clean) || /^192\.168\./.test(clean) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(clean);
 }
 
 interface XplexInfo {
@@ -114,11 +129,11 @@ interface RequestContext {
 
 export class LogParser {
   private activeRequests = new Map<string, RequestContext>();
-  private userIpMap = new Map<string, string>();
-  private deviceByClientId = new Map<string, DeviceProfile>();
-  private deviceByUserIp = new Map<string, DeviceProfile>();
-  private lastConnectTime = new Map<string, number>();
-
+  private userIpMap = new BoundedMap<string, string>(1000);
+  private deviceByClientId = new BoundedMap<string, DeviceProfile>(2000);
+  private deviceByUserIp = new BoundedMap<string, DeviceProfile>(2000);
+  private lastConnectTime = new BoundedMap<string, number>(1000);
+  private recentTimelinePlays = new BoundedMap<string, number>(2000); // F-15: 재생 중 스트리밍 상관분석용
   private cleanupOldRequests() {
     const now = Date.now();
     for (const [key, ctx] of this.activeRequests.entries()) {
@@ -149,13 +164,25 @@ export class LogParser {
   private rememberProfile(user: string | undefined, ip: string | undefined, p: DeviceProfile) {
     if (p.clientId) {
       const prev = this.deviceByClientId.get(p.clientId);
-      this.deviceByClientId.set(p.clientId, {
+      const updated: DeviceProfile = {
         clientId: p.clientId,
         device_name: p.device_name !== "알 수 없는 기기" ? p.device_name : (prev?.device_name ?? p.device_name),
         platform: p.platform !== "Unknown" ? p.platform : (prev?.platform ?? p.platform),
         product: p.product ?? prev?.product,
         client_version: p.client_version ?? prev?.client_version,
-      });
+      };
+      this.deviceByClientId.set(p.clientId, updated);
+      // F-10: 기기 프로필을 DB에 영속화하여 서버 재시작 시에도 유지
+      if (updated.device_name !== "알 수 없는 기기") {
+        try {
+          saveDeviceProfile(p.clientId, {
+            device_name: updated.device_name,
+            platform: updated.platform,
+            product: updated.product ?? null,
+            client_version: updated.client_version ?? null,
+          });
+        } catch {}
+      }
     }
     if (user && ip) {
       const key = `${user}@${ip}`;
@@ -169,7 +196,23 @@ export class LogParser {
   /** 요청 컨텍스트에 기지식을 역보정: 동일 clientId/사용자+IP의 최신 프로필로 빈칸 채움 */
   private backfillProfile(ctx: RequestContext) {
     if (ctx.clientId) {
-      const known = this.deviceByClientId.get(ctx.clientId);
+      let known = this.deviceByClientId.get(ctx.clientId);
+      // F-10: 인메모리 캐시에 없으면 DB 영속 프로필에서 복원
+      if (!known) {
+        try {
+          const dbProfile = getDeviceProfile(ctx.clientId);
+          if (dbProfile) {
+            known = {
+              clientId: ctx.clientId,
+              device_name: dbProfile.device_name,
+              platform: dbProfile.platform,
+              product: dbProfile.product ?? undefined,
+              client_version: dbProfile.client_version ?? undefined,
+            };
+            this.deviceByClientId.set(ctx.clientId, known);
+          }
+        } catch {}
+      }
       if (known) {
         if (!ctx.device_name || ctx.device_name === "알 수 없는 기기") ctx.device_name = known.device_name;
         if (!ctx.platform || ctx.platform === "Unknown") ctx.platform = known.platform;
@@ -193,11 +236,12 @@ export class LogParser {
     if (!timeMatch) return null;
     const timestamp = parsePlexTimestamp(timeMatch[1]);
 
-    const forwardedMatch = line.match(/Using X-Forwarded-For:\s*([0-9a-fA-F:.]+)\s+as remote address/i) ||
-      line.match(/X-Forwarded-For:\s*([0-9a-fA-F:.]+)/i);
+    // F-03: Plex 공인 검증 라인을 우선 채택하고 IP 유효성 검증
+    const verifiedMatch = line.match(/Using X-Forwarded-For:\s*([0-9a-fA-F:.]+)\s+as remote address/i);
     let detectedIp: string | null = null;
-    if (forwardedMatch) detectedIp = forwardedMatch[1].replace("::ffff:", "").trim();
-
+    if (verifiedMatch && isValidIp(verifiedMatch[1].replace("::ffff:", "").trim())) {
+      detectedIp = verifiedMatch[1].replace("::ffff:", "").trim();
+    }
     const authMatch = line.match(/Auth:\s+authenticated user\s+(\d+)\s+as\s+([^\s]+)/);
     if (authMatch && detectedIp) this.userIpMap.set(authMatch[2], detectedIp);
 
@@ -207,10 +251,17 @@ export class LogParser {
         const [, remoteAddr, method, url, reqId] = reqMatch;
         let clientIp = detectedIp;
         if (!clientIp) {
-          const xffMatch = line.match(/X-Forwarded-For\s*=>\s*([0-9a-fA-F:.]+)/i);
-          clientIp = xffMatch
-            ? xffMatch[1].replace("::ffff:", "").trim()
-            : (remoteAddr.split(" ")[0] ?? "").split(":")[0]?.replace("::ffff:", "").trim();
+          const remoteIp = (remoteAddr.split(" ")[0] ?? "").split(":")[0]?.replace("::ffff:", "").trim();
+          // 신뢰할 수 있는 프록시(로컬/사설망)에서 온 요청일 때만 X-Forwarded-For 수용 (F-03)
+          if (isPrivateOrProxyIp(remoteIp)) {
+            const xffMatch = line.match(/X-Forwarded-For\s*=>\s*([0-9a-fA-F:.]+)/i);
+            if (xffMatch && isValidIp(xffMatch[1].replace("::ffff:", "").trim())) {
+              clientIp = xffMatch[1].replace("::ffff:", "").trim();
+            }
+          }
+          if (!clientIp && isValidIp(remoteIp)) {
+            clientIp = remoteIp;
+          }
         }
         const userMatch = line.match(/Signed-in Token\s*\(([^)]+)\)/);
         const userName = userMatch?.[1]?.trim();
@@ -240,6 +291,10 @@ export class LogParser {
             const params = new URLSearchParams(queryStr);
             ctx.ratingKey = params.get("ratingKey") || undefined;
             ctx.state = params.get("state") || undefined;
+            if (ctx.ratingKey && userName) {
+              // F-15: timeline 보고 시점 기록 (재생 중 스트리밍 세션 판별용)
+              this.recentTimelinePlays.set(`${userName}@${ctx.ratingKey}`, Date.now());
+            }
             const t = params.get("time");
             if (t) ctx.time = parseInt(t, 10);
             const d = params.get("duration");
@@ -370,8 +425,9 @@ export class LogParser {
     if (ctx.partId && bytes > 5 * 1024 * 1024) {
       const meta = resolveMediaByPartId(ctx.partId);
       const mediaTitle = meta?.media_title || `미디어 파트 #${ctx.partId}`;
-      // 스트리밍 판정: timeline 보고 이력 있는 ratingKey와 매칭되거나 Range 분할 전송이면 재생 중 스트리밍
-      const isStream = ctx.hasRange ? 1 : 0;
+      // F-15: 스트리밍 판정 - Range 헤더 분할 전송이거나, 최근 5분 이내 해당 영상 timeline 보고가 있었던 경우 스트리밍으로 판정
+      const hasRecentPlay = meta?.rating_key && (Date.now() - (this.recentTimelinePlays.get(`${userName}@${meta.rating_key}`) ?? 0) < 5 * 60 * 1000);
+      const isStream = ctx.hasRange || hasRecentPlay ? 1 : 0;
       const hash = createHash("md5")
         .update(`download:${userName}:${ctx.partId}:${Math.floor(bytes / 10000000)}:${ctx.timestamp.slice(0, 16)}:${isStream}`).digest("hex");
       const kindKo = isStream ? "재생 중 스트리밍 전송" : "오프라인용 다운로드";

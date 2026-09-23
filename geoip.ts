@@ -46,7 +46,10 @@ export function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-/** 배치 조회 (최대 100개, ip-api 무료 한도: 분당 45회 → 호출 간격은 호출부에서 조절) */
+let lastBatchCall = 0;
+const MIN_BATCH_INTERVAL_MS = 2000; // 분당 최대 30회로 엄격 제한 (F-14: ip-api 무료 한도 45회 초과 차단 방지)
+
+/** 배치 조회 (최대 100개, 스로틀 적용) */
 export async function lookupIpsBatch(ips: string[]): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   const targets = [...new Set(ips)].filter((ip) => !isPrivateIp(ip));
@@ -60,7 +63,16 @@ export async function lookupIpsBatch(ips: string[]): Promise<Record<string, stri
     return result;
   }
   try {
-    const res = await fetch("http://ip-api.com/batch?fields=status,countryCode,regionName,city,isp,query", {
+    // 스로틀: 직전 호출과 최소 2초 간격 보장
+    const now = Date.now();
+    const elapsed = now - lastBatchCall;
+    if (elapsed < MIN_BATCH_INTERVAL_MS) {
+      await Bun.sleep(MIN_BATCH_INTERVAL_MS - elapsed);
+    }
+    lastBatchCall = Date.now();
+
+    const endpoint = process.env.GEOIP_API_URL || "http://ip-api.com/batch?fields=status,countryCode,regionName,city,isp,query";
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(uncached.slice(0, 100)),
