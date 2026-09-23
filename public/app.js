@@ -24,6 +24,7 @@ const state = {
   isLoadingPast: false,
   liveTailInterval: null,
   isLiveTailActive: false,
+  plexMachineId: "19b98de608795fd38dc942ab99885d7335d4e77a",
 
   // 분석 (Analytics) 상태
   analytics: {
@@ -127,11 +128,27 @@ const el = {
 async function init() {
   initMeasuredViewport();
   bindEvents();
+  fetchPlexServerInfo();
   await loadSettings();
   await refreshDashboard();
   await loadLogGroups();
 }
 
+async function fetchPlexServerInfo() {
+  try {
+    const res = await fetch("/api/plex-server-info");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.machineIdentifier) state.plexMachineId = data.machineIdentifier;
+    }
+  } catch {}
+}
+
+function getPlexMediaUrl(ratingKey) {
+  if (!ratingKey) return null;
+  const machineId = state.plexMachineId || "19b98de608795fd38dc942ab99885d7335d4e77a";
+  return `https://app.plex.tv/desktop/#!/server/${machineId}/details?key=%2Flibrary%2Fmetadata%2F${ratingKey}`;
+}
 // 실측 뷰포트: 모바일 주소창/툴바/노치 변화에 맞춰 body 높이를 px로 고정
 function initMeasuredViewport() {
   const visibleContainer = () =>
@@ -667,9 +684,28 @@ function renderActivityCard(act) {
     details.push(`<span class="text-gray-500">알림 채널 세션 오픈</span>`);
   }
 
+  const plexUrl = act.media_id ? getPlexMediaUrl(act.media_id) : null;
+  const posterThumbHtml = act.media_id
+    ? `<a href="${plexUrl}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 mt-0.5 group/post" title="Plex에서 미디어 열기 (새 탭)">
+        <img src="/api/poster?ratingKey=${act.media_id}" alt="" class="w-6 h-8 object-cover rounded shadow bg-gray-800 transition-opacity hover:opacity-80" onerror="this.remove()" />
+      </a>`
+    : "";
+
+  const mediaLinkHtml = mediaText
+    ? act.media_id && plexUrl
+      ? `<div class="truncate">
+          <a href="${plexUrl}" target="_blank" rel="noopener noreferrer" class="text-gray-200 hover:text-plex font-medium truncate inline-flex items-center gap-1 group/media transition-colors" title="Plex에서 미디어 열기 (새 탭)">
+            <span class="truncate group-hover/media:underline">${escapeHtml(mediaText)}</span>
+            <i class="fa-solid fa-arrow-up-right-from-square text-[9px] text-gray-500 group-hover/media:text-plex opacity-70 group-hover/media:opacity-100 flex-shrink-0"></i>
+          </a>
+        </div>`
+      : `<div class="text-gray-200 font-medium truncate">${escapeHtml(mediaText)}</div>`
+    : "";
+
   return `
     <div class="activity-card bg-[#161b22] border border-gray-800 rounded-lg px-2.5 py-1.5 flex items-start gap-2 text-xs">
       <div class="w-6 h-6 rounded-md bg-gray-800 flex items-center justify-center text-white font-bold text-[11px] flex-shrink-0 mt-0.5">${initial}</div>
+      ${posterThumbHtml}
       <div class="min-w-0 flex-1 leading-snug space-y-0.5">
         <!-- 1행: 대제목 (사용자명, 배지, 시간, IP, 위치) -->
         <div class="flex items-center gap-1.5 flex-wrap">
@@ -682,7 +718,7 @@ function renderActivityCard(act) {
         </div>
 
         <!-- 2행: 중제목 (미디어 정보) -->
-        ${mediaText ? `<div class="text-gray-200 font-medium truncate">${escapeHtml(mediaText)}</div>` : ""}
+        ${mediaLinkHtml}
 
         <!-- 3행: 상세 정보 (순수 부가 정보만) -->
         <div class="text-gray-500 text-[11px] flex items-center gap-2 flex-wrap">
@@ -1485,21 +1521,38 @@ function renderTopContent(items) {
       typeBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">${escapeHtml(item.type_label)}</span>`;
     }
 
+    const plexUrl = item.plex_url || (item.rating_key ? getPlexMediaUrl(item.rating_key) : null);
+    const fallbackPosterUrl = item.rating_key ? `/api/poster?ratingKey=${item.rating_key}` : null;
+    let thumbSrc = item.thumb_url || fallbackPosterUrl;
     let thumbHtml = "";
-    if (item.thumb_url) {
-      thumbHtml = `<img src="${escapeHtml(item.thumb_url)}" alt="" class="w-8 h-10 object-cover rounded shadow flex-shrink-0 bg-gray-800" onerror="this.remove()" />`;
+    if (thumbSrc) {
+      const fallbackAttr = fallbackPosterUrl && thumbSrc !== fallbackPosterUrl
+        ? `onerror="this.onerror=null; this.src='${fallbackPosterUrl}';"`
+        : `onerror="this.remove()"`;
+      thumbHtml = `<img src="${escapeHtml(thumbSrc)}" alt="" class="w-8 h-11 object-cover rounded shadow flex-shrink-0 bg-gray-800 transition-opacity hover:opacity-80" ${fallbackAttr} />`;
     } else {
       const icon = item.type_label === "영화" ? "fa-film" : "fa-tv";
-      thumbHtml = `<div class="w-8 h-10 rounded bg-[#0e1117] border border-gray-800 flex items-center justify-center text-gray-500 flex-shrink-0 text-xs"><i class="fa-solid ${icon}"></i></div>`;
+      thumbHtml = `<div class="w-8 h-11 rounded bg-[#0e1117] border border-gray-800 flex items-center justify-center text-gray-500 flex-shrink-0 text-xs"><i class="fa-solid ${icon}"></i></div>`;
     }
 
+    const thumbWrap = plexUrl
+      ? `<a href="${plexUrl}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0" title="Plex에서 미디어 열기 (새 탭)">${thumbHtml}</a>`
+      : thumbHtml;
+
+    const titleWrap = plexUrl
+      ? `<a href="${plexUrl}" target="_blank" rel="noopener noreferrer" class="font-bold text-white hover:text-plex truncate text-xs inline-flex items-center gap-1 group/title transition-colors" title="Plex에서 미디어 열기 (새 탭)">
+          <span class="truncate group-hover/title:underline">${escapeHtml(item.title)}</span>
+          <i class="fa-solid fa-arrow-up-right-from-square text-[9px] text-gray-500 group-hover/title:text-plex opacity-70 group-hover/title:opacity-100 flex-shrink-0"></i>
+        </a>`
+      : `<span class="font-bold text-white truncate text-xs">${escapeHtml(item.title)}</span>`;
+
     return `
-      <div class="bg-[#0e1117] border border-gray-800/80 rounded-lg p-2.5 flex items-center space-x-3 text-xs hover:border-gray-700 transition-colors">
+      <div class="bg-[#0e1117] border border-gray-800/80 rounded-lg p-2.5 flex items-center space-x-3 text-xs hover:border-gray-700 transition-colors group">
         ${rankBadge}
-        ${thumbHtml}
+        ${thumbWrap}
         <div class="min-w-0 flex-1 space-y-1">
           <div class="flex items-center space-x-1.5 flex-wrap">
-            <span class="font-bold text-white truncate text-xs">${escapeHtml(item.title)}</span>
+            ${titleWrap}
             ${typeBadge}
           </div>
           <div class="w-full bg-gray-800/80 rounded-full h-1.5 overflow-hidden">

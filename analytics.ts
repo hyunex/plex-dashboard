@@ -328,6 +328,129 @@ export function getPeakHours(source: "activity" | "views30d" = "activity"): Peak
   };
 }
 
+// Plex 서버 머신 식별자 및 공식 웹 URL 헬퍼
+let plexMachineIdentifier = "19b98de608795fd38dc942ab99885d7335d4e77a";
+
+export async function initPlexServerInfo(): Promise<string> {
+  try {
+    const res = await fetch("http://127.0.0.1:32400/identity");
+    if (res.ok) {
+      const xml = await res.text();
+      const match = xml.match(/machineIdentifier="([^"]+)"/);
+      if (match) {
+        plexMachineIdentifier = match[1];
+      }
+    }
+  } catch {}
+  return plexMachineIdentifier;
+}
+initPlexServerInfo();
+
+export function getPlexMachineIdentifier(): string {
+  return plexMachineIdentifier;
+}
+
+export function makePlexMediaUrl(ratingKey: number | string | null | undefined): string | null {
+  if (!ratingKey) return null;
+  return `https://app.plex.tv/desktop/#!/server/${plexMachineIdentifier}/details?key=%2Flibrary%2Fmetadata%2F${ratingKey}`;
+}
+
+export async function getPosterResponse(ratingKey: string): Promise<Response> {
+  const token = process.env.PLEX_TOKEN || "";
+  if (plexDb) {
+    try {
+      // 쇼/에피소드의 경우 에피소드 썸네일(스틸컷)은 완전히 배제하고, 최소 시즌 포스터 또는 쇼 대표 포스터만 탐색
+      const row = plexDb.query(`
+        SELECT
+          item.metadata_type,
+          CASE
+            -- 영화(1) 또는 쇼 자체(2): 메타데이터 포스터 사용
+            WHEN item.metadata_type IN (1, 2) THEN item.user_thumb_url
+            -- 에피소드(4): 에피소드 스크린샷은 절대 배제하고, 시즌 포스터 -> 쇼 대표 포스터 -> 쇼 팬아트 순으로만 탐색
+            WHEN item.metadata_type = 4 THEN COALESCE(
+              NULLIF((SELECT s.user_thumb_url FROM metadata_items s WHERE s.id = item.parent_id AND s.user_thumb_url LIKE 'http%'), ''),
+              NULLIF((SELECT show.user_thumb_url FROM metadata_items s JOIN metadata_items show ON s.parent_id = show.id WHERE s.id = item.parent_id AND show.user_thumb_url LIKE 'http%'), ''),
+              NULLIF((SELECT show.user_art_url FROM metadata_items s JOIN metadata_items show ON s.parent_id = show.id WHERE s.id = item.parent_id AND show.user_art_url LIKE 'http%'), '')
+            )
+            WHEN item.metadata_type = 3 THEN COALESCE(
+              NULLIF(item.user_thumb_url, ''),
+              NULLIF((SELECT show.user_thumb_url FROM metadata_items show WHERE show.id = item.parent_id AND show.user_thumb_url LIKE 'http%'), ''),
+              NULLIF((SELECT show.user_art_url FROM metadata_items show WHERE show.id = item.parent_id AND show.user_art_url LIKE 'http%'), '')
+            )
+            ELSE item.user_thumb_url
+          END as poster_url,
+          -- 트랜스코딩 폴백용 상위 ID (에피소드면 에피소드 대신 시즌ID -> 쇼ID만 사용)
+          CASE
+            WHEN item.metadata_type = 4 THEN (SELECT s.id FROM metadata_items s WHERE s.id = item.parent_id)
+            ELSE item.id
+          END as season_id,
+          CASE
+            WHEN item.metadata_type = 4 THEN (SELECT show.id FROM metadata_items s JOIN metadata_items show ON s.parent_id = show.id WHERE s.id = item.parent_id)
+            WHEN item.metadata_type = 3 THEN item.parent_id
+            ELSE item.id
+          END as show_id
+        FROM metadata_items item
+        WHERE item.id = ?
+      `).get(ratingKey) as {
+        metadata_type: number;
+        poster_url: string | null;
+        season_id: number | null;
+        show_id: number | null;
+      } | null;
+
+      if (row?.poster_url && (row.poster_url.startsWith("http://") || row.poster_url.startsWith("https://"))) {
+        return Response.redirect(row.poster_url, 302);
+      }
+
+      // 외부 HTTP URL이 없으면 로컬 Plex photo transcode 시도
+      // 에피소드(4)인 경우 에피소드 썸네일은 배제하고, 시즌 또는 쇼의 thumb을 호출!
+      const tryKeys: string[] = [];
+      if (row?.metadata_type === 4) {
+        if (row.season_id) tryKeys.push(String(row.season_id));
+        if (row.show_id) tryKeys.push(String(row.show_id));
+      } else if (row?.metadata_type === 3) {
+        tryKeys.push(String(row.season_id));
+        if (row.show_id) tryKeys.push(String(row.show_id));
+      } else {
+        tryKeys.push(ratingKey);
+      }
+
+      for (const k of tryKeys) {
+        const photoUrl = `http://127.0.0.1:32400/photo/:/transcode?width=300&height=450&minSize=1&upscale=1&url=%2Flibrary%2Fmetadata%2F${k}%2Fthumb`;
+        const res = await fetch(photoUrl, {
+          headers: { "X-Plex-Token": token },
+        });
+        if (res.ok) {
+          return new Response(res.body, {
+            headers: {
+              "Content-Type": res.headers.get("content-type") || "image/jpeg",
+              "Cache-Control": "public, max-age=86400",
+            },
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[Poster] 포스터 조회 오류:", err);
+    }
+  }
+
+  // 기본 Plex transcode 시도 (영화 등)
+  try {
+    const photoUrl = `http://127.0.0.1:32400/photo/:/transcode?width=300&height=450&minSize=1&upscale=1&url=%2Flibrary%2Fmetadata%2F${ratingKey}%2Fthumb`;
+    const res = await fetch(photoUrl, { headers: { "X-Plex-Token": token } });
+    if (res.ok) {
+      return new Response(res.body, {
+        headers: {
+          "Content-Type": res.headers.get("content-type") || "image/jpeg",
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+    }
+  } catch {}
+
+  return new Response("Poster Not Found", { status: 404 });
+}
+
 // 3. 최근 30일간 최다 재생 콘텐츠 Top 10
 export interface TopContentItem {
   rank: number;
@@ -338,6 +461,8 @@ export interface TopContentItem {
   viewer_count: number;
   last_played_at: string;
   thumb_url: string | null;
+  rating_key: number | string | null;
+  plex_url: string | null;
   percentage: number; // 1위 대비 비율 (0 ~ 100)
 }
 
@@ -348,6 +473,7 @@ export function getTop10PlayedContent(): TopContentItem[] {
       SELECT
         COALESCE(show_title, media_title) as title,
         media_type,
+        MAX(media_id) as rating_key,
         COUNT(*) as play_count,
         COUNT(DISTINCT user_name) as viewer_count,
         MAX(timestamp) as last_played_at
@@ -356,7 +482,7 @@ export function getTop10PlayedContent(): TopContentItem[] {
       GROUP BY COALESCE(show_title, media_title)
       ORDER BY play_count DESC
       LIMIT 10
-    `).all() as Array<{ title: string; media_type: string; play_count: number; viewer_count: number; last_played_at: string }>;
+    `).all() as Array<{ title: string; media_type: string; rating_key: string | null; play_count: number; viewer_count: number; last_played_at: string }>;
 
     const maxCount = rows[0]?.play_count || 1;
     return rows.map((r, idx) => ({
@@ -367,29 +493,50 @@ export function getTop10PlayedContent(): TopContentItem[] {
       play_count: r.play_count,
       viewer_count: r.viewer_count,
       last_played_at: r.last_played_at,
-      thumb_url: null,
+      thumb_url: r.rating_key ? `/api/poster?ratingKey=${r.rating_key}` : null,
+      rating_key: r.rating_key,
+      plex_url: makePlexMediaUrl(r.rating_key),
       percentage: Math.round((r.play_count / maxCount) * 100),
     }));
   }
 
   try {
+    // 시즌 포스터가 없다면 쇼 포스터, 쇼 포스터가 없다면 팬아트 등 계층적 대체 포스터 탐색
     const rows = plexDb.query(`
       SELECT
-        COALESCE(NULLIF(grandparent_title, ''), title) as display_title,
-        metadata_type,
-        thumb_url,
+        COALESCE(NULLIF(v.grandparent_title, ''), v.title) as display_title,
+        v.metadata_type,
         COUNT(*) as play_count,
-        COUNT(DISTINCT account_id) as viewer_count,
-        datetime(MAX(viewed_at), 'unixepoch', 'localtime') as last_viewed_at
-      FROM metadata_item_views
-      WHERE viewed_at >= strftime('%s', 'now', '-30 days')
-      GROUP BY COALESCE(NULLIF(grandparent_title, ''), title)
+        COUNT(DISTINCT v.account_id) as viewer_count,
+        datetime(MAX(v.viewed_at), 'unixepoch', 'localtime') as last_viewed_at,
+        COALESCE(
+          -- 1. 쇼 또는 영화 자체의 포스터 (HTTP URL)
+          (SELECT m.user_thumb_url FROM metadata_items m WHERE m.title = COALESCE(NULLIF(v.grandparent_title, ''), v.title) AND m.metadata_type IN (1, 2) AND m.user_thumb_url LIKE 'http%' LIMIT 1),
+          -- 2. 시즌의 포스터 (HTTP URL)
+          (SELECT s.user_thumb_url FROM metadata_items s JOIN metadata_items m ON s.parent_id = m.id WHERE m.title = COALESCE(NULLIF(v.grandparent_title, ''), v.title) AND s.user_thumb_url LIKE 'http%' LIMIT 1),
+          -- 3. 쇼의 배경 아트 (팬아트 HTTP URL)
+          (SELECT m.user_art_url FROM metadata_items m WHERE m.title = COALESCE(NULLIF(v.grandparent_title, ''), v.title) AND m.metadata_type IN (1, 2) AND m.user_art_url LIKE 'http%' LIMIT 1),
+          -- 4. 개별 에피소드 썸네일 (HTTP URL)
+          (SELECT m.user_thumb_url FROM metadata_items m WHERE m.title = v.title AND m.user_thumb_url LIKE 'http%' LIMIT 1),
+          -- 5. metadata_item_views 기록된 썸네일
+          (CASE WHEN v.thumb_url LIKE 'http%' THEN v.thumb_url ELSE NULL END)
+        ) as poster_url,
+        COALESCE(
+          -- 쇼/영화 자체의 ratingKey
+          (SELECT m.id FROM metadata_items m WHERE m.title = COALESCE(NULLIF(v.grandparent_title, ''), v.title) AND m.metadata_type IN (1, 2) LIMIT 1),
+          -- 없으면 대표 항목 ratingKey
+          (SELECT m.id FROM metadata_items m WHERE m.title = v.title LIMIT 1)
+        ) as rating_key
+      FROM metadata_item_views v
+      WHERE v.viewed_at >= strftime('%s', 'now', '-30 days')
+      GROUP BY display_title
       ORDER BY play_count DESC
       LIMIT 10;
     `).all() as Array<{
       display_title: string;
       metadata_type: number;
-      thumb_url: string | null;
+      poster_url: string | null;
+      rating_key: number | null;
       play_count: number;
       viewer_count: number;
       last_viewed_at: string;
@@ -403,10 +550,10 @@ export function getTop10PlayedContent(): TopContentItem[] {
       else if (r.metadata_type === 4 || r.metadata_type === 2) typeLabel = "드라마/시리즈";
       else if (r.metadata_type === 8 || r.metadata_type === 9 || r.metadata_type === 10) typeLabel = "음악";
 
-      let thumb = r.thumb_url;
-      // HTTP 웹 이미지 외의 내부 Plex URL(metadata://)은 외부 표시가 안 되므로 null 처리
-      if (thumb && !thumb.startsWith("http://") && !thumb.startsWith("https://")) {
-        thumb = null;
+      let thumb = r.poster_url;
+      // 외부 HTTP가 없더라도 rating_key가 있으면 로컬 프록시 API 사용
+      if (!thumb && r.rating_key) {
+        thumb = `/api/poster?ratingKey=${r.rating_key}`;
       }
 
       return {
@@ -418,6 +565,8 @@ export function getTop10PlayedContent(): TopContentItem[] {
         viewer_count: r.viewer_count,
         last_played_at: r.last_viewed_at,
         thumb_url: thumb,
+        rating_key: r.rating_key,
+        plex_url: makePlexMediaUrl(r.rating_key),
         percentage: Math.round((r.play_count / maxCount) * 100),
       };
     });

@@ -16,6 +16,8 @@ import {
   getTop10PlayedContent,
   getMonthlyUserConsumption,
   getUserDataConsumption,
+  getPosterResponse,
+  getPlexMachineIdentifier,
 } from "./analytics.ts";
 import {
   getAvailableLogGroups,
@@ -178,6 +180,22 @@ const server = Bun.serve({
         monthlyUsers: getUserDataConsumption(rawUserRange),
       });
     }
+    // 3-6. 포스터 썸네일 스트리밍 / 리다이렉트 API
+    if (pathname === "/api/poster" && (req.method === "GET" || req.method === "HEAD")) {
+      const ratingKey = url.searchParams.get("ratingKey");
+      if (!ratingKey) return new Response("ratingKey required", { status: 400 });
+      return await getPosterResponse(ratingKey);
+    }
+
+    // 3-7. Plex 서버 정보 API (웹 앱 링크용)
+    if (pathname === "/api/plex-server-info" && (req.method === "GET" || req.method === "HEAD")) {
+      const machineId = getPlexMachineIdentifier();
+      return jsonResponse({
+        machineIdentifier: machineId,
+        webBaseUrl: `https://app.plex.tv/desktop/#!/server/${machineId}/details?key=%2Flibrary%2Fmetadata%2F`,
+      });
+    }
+
 
 
     // 4. 로그 그룹 목록 API
