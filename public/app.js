@@ -24,7 +24,7 @@ const state = {
   isLoadingPast: false,
   liveTailInterval: null,
   isLiveTailActive: false,
-  plexMachineId: "19b98de608795fd38dc942ab99885d7335d4e77a",
+  plexMachineId: "",
 
   // 분석 (Analytics) 상태
   analytics: {
@@ -146,7 +146,9 @@ async function fetchPlexServerInfo() {
 
 function getPlexMediaUrl(ratingKey) {
   if (!ratingKey) return null;
-  const machineId = state.plexMachineId || "19b98de608795fd38dc942ab99885d7335d4e77a";
+  // 서버 식별자를 확인하지 못한 경우 잘못된 링크를 만들지 않는다 (API 응답으로만 채운다)
+  const machineId = state.plexMachineId;
+  if (!machineId) return null;
   return `https://app.plex.tv/desktop/#!/server/${machineId}/details?key=%2Flibrary%2Fmetadata%2F${ratingKey}`;
 }
 // 실측 뷰포트: 모바일 주소창/툴바/노치 변화에 맞춰 body 높이를 px로 고정
@@ -585,8 +587,18 @@ async function handleActivityScroll() {
   }
 }
 
+// 서버(geoip.ts isPrivateIp)와 동일 기준: 10/8, 192.168/16, 127/8, 169.254/16, CGNAT(100.64~127),
+// 그리고 172.16~31만 사설망이다. 기존 구현은 172.0/172.32 같은 공인 대역까지 제외해 위치가 표시되지 않았다.
+function isPrivateIpAddress(ip) {
+  return (
+    /^(?:10\.|192\.168\.|127\.|169\.254\.)/.test(ip) ||
+    /^172\.(?:1[6-9]|2\d|3[01])\./.test(ip) ||
+    /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)
+  );
+}
+
 async function resolveLocations(items) {
-  const ips = [...new Set(items.map((i) => i.client_ip).filter((ip) => ip && ip !== "Unknown" && !ip.startsWith("127.") && !ip.startsWith("172.") && !ip.startsWith("192.168.")))];
+  const ips = [...new Set(items.map((i) => i.client_ip).filter((ip) => ip && ip !== "Unknown" && !isPrivateIpAddress(ip)))];
   const needed = ips.filter((ip) => !state.locations[ip]);
   if (needed.length === 0) {
     updateLocationSpans();
@@ -1018,7 +1030,7 @@ async function saveSettings() {
   const streamVal = el.settingStreamDownloads && el.settingStreamDownloads.checked ? "1" : "0";
 
   try {
-    await fetch("/api/settings", {
+    const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1027,13 +1039,17 @@ async function saveSettings() {
         show_stream_downloads: streamVal,
       }),
     });
-    el.importStatusText.innerText = `자동 수집 주기: ${interval}초`;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    // 서버가 실제 적용한 값으로 표시해 "저장됐지만 반영 안 됨" 상태를 없앤다.
+    const appliedInterval = data.import_interval_sec ?? interval;
+    el.importStatusText.innerText = `자동 수집 주기: ${appliedInterval}초 (즉시 적용)`;
     closeSettingsModal();
-    alert("설정이 저장되었습니다.");
+    alert("설정이 저장되어 즉시 적용되었습니다.");
     await reloadActivities();
   } catch (err) {
     console.error("설정 저장 실패:", err);
-    alert("설정 저장에 실패했습니다.");
+    alert(`설정 저장에 실패했습니다: ${err.message || err}`);
   }
 }
 

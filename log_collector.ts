@@ -62,7 +62,8 @@ export function getAvailableLogGroups(): LogGroupInfo[] {
       if (!groups.has(baseName)) {
         groups.set(baseName, { category, files: [] });
       }
-      groups.get(baseName)!.files.push({ path: fullPath, num: rotNum, size: st.size });
+      // mtime을 빠뜨리면 lastWrite가 NaN이 되어 플러그인 로그의 "최근 갱신 순" 정렬이 깨진다.
+      groups.get(baseName)!.files.push({ path: fullPath, num: rotNum, size: st.size, mtime: st.mtimeMs });
     }
   }
 
@@ -100,7 +101,7 @@ export function getAvailableLogGroups(): LogGroupInfo[] {
       if (!groups.has(groupId)) {
         groups.set(groupId, { category: "plugin", files: [] });
       }
-      groups.get(groupId)!.files.push({ path: fullPath, num: rotNum, size: st.size });
+      groups.get(groupId)!.files.push({ path: fullPath, num: rotNum, size: st.size, mtime: st.mtimeMs });
     }
   }
 
@@ -278,13 +279,35 @@ export class LogCollector {
 
   constructor(private intervalSec = 30) {}
 
+  /** 현재 적용 중인 수집 주기(초) */
+  public getIntervalSec(): number {
+    return this.intervalSec;
+  }
+
+  /**
+   * 설정 변경을 재시작 없이 즉시 반영한다.
+   * 실행 중인 타이머를 해제하고 새 주기로 재장전하며, 다음 수집은 새 주기 후에 시작된다.
+   */
+  public setIntervalSec(sec: number): number {
+    const next = Number.isFinite(sec) ? Math.floor(sec) : this.intervalSec;
+    this.intervalSec = Math.max(5, next);
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = setInterval(() => {
+        void this.runImport();
+      }, this.intervalSec * 1000);
+    }
+    console.log(`[LogCollector] 수집 주기가 ${this.intervalSec}초로 변경되었습니다.`);
+    return this.intervalSec;
+  }
+
   public async start() {
     console.log(`[LogCollector] 로그 수집기 시작 (주기: ${this.intervalSec}초)`);
     // 즉시 첫 회 수집 실행 (기존 쌓인 분할 로그 포함)
     await this.runImport();
 
-    this.timer = setInterval(async () => {
-      await this.runImport();
+    this.timer = setInterval(() => {
+      void this.runImport();
     }, this.intervalSec * 1000);
   }
 
@@ -356,7 +379,13 @@ export class LogCollector {
 
     const fd = openSync(filePath, "r");
     try {
-      readSync(fd, buffer, 0, bytesToRead, lastOffset);
+      // readSync는 요청량보다 적게 읽을 수 있으므로(short read) EOF까지 반복해서 채운다.
+      let filled = 0;
+      while (filled < bytesToRead) {
+        const read = readSync(fd, buffer, filled, bytesToRead - filled, lastOffset + filled);
+        if (read <= 0) break;
+        filled += read;
+      }
     } finally {
       closeSync(fd);
     }

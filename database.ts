@@ -1,7 +1,10 @@
 import { Database } from "bun:sqlite";
-import { join } from "path";
+import { dirname, join } from "path";
+import { mkdirSync } from "fs";
 
 const DB_PATH = join(import.meta.dir, "data", "plex_dashboard.db");
+// 신규 클론(또는 data/ 삭제 후) 첫 실행에서도 기동/테스트가 실패하지 않도록 디렉터리를 보장
+mkdirSync(dirname(DB_PATH), { recursive: true });
 export const db = new Database(DB_PATH);
 
 // WAL 모드 활성화로 높은 동시성 확보

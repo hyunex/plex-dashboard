@@ -9,7 +9,8 @@
 ### 1. 사용자 중심의 한글 활동 타임라인 (활동 피드)
 * **불필요한 디버그 파편 제거**: 내부 루프백 포트, 토큰 파라미터, 복잡한 HTTP 프로토콜 로그를 배제하고 실질적인 사용자 이벤트만 정제하여 표시합니다.
 * **정밀 기기 식별 & GeoIP 위치 연동**:
-  * 단순 User-Agent 문자열에 의존하지 않고, Plex 클라이언트 헤더와 세션 식별자를 분석하여 모바일 모델명(예: `Galaxy Phone`), 데스크탑 PC, Android TV, 웹 브라우저(`Firefox (PC 웹)`) 등을 명확하게 식별합니다.
+  * 단순 User-Agent 문자열에 의존하지 않고, Plex 클라이언트 헤더와 세션 식별자를 분석하여 모바일 모델명(예: `SM-F976N`), 데스크탑 PC, Android TV, 웹 브라우저(`Firefox (PC 웹)`) 등을 명확하게 식별합니다.
+  * 제품명은 로그의 `X-Plex-Product`를 우선하고, 없으면 clientId별 학습 프로필(DB 영속)로 보완합니다. Android의 `Dalvik` UA는 Plex 공식 앱과 Plezy가 공유하므로 UA만으로 제품을 단정하지 않습니다.
   * 접속 IP를 기반으로 국가, 시/도, 도시, 통신사(ISP) 정보를 백그라운드 캐싱하여 표시합니다.
 * **풍부한 미디어 정보 계층 연동**:
   * Plex 로컬 데이터베이스(`com.plexapp.plugins.library.db`)와 읽기 전용으로 연동하여 단순 에피소드 제목뿐만 아니라 **쇼 명, 시즌 번호, 에피소드 번호**(`쇼 명 [S1E13] - 에피소드 제목`) 또는 영화명과 개봉 연도를 완벽하게 출력합니다.
@@ -37,6 +38,7 @@
 ### 4. Plex 로그 로테이션과 무관한 독립 보관소 (SQLite)
 * Plex의 자체 로그 회전(`.1.log` ~ `.5.log` 후 자동 삭제)으로 인한 데이터 유실을 방지합니다.
 * 백그라운드 증분 수집 데몬이 변경 사항을 주기적으로 확인하여 대시보드 전용 SQLite 데이터베이스에 영구 적재합니다.
+* **수집 주기 즉시 반영**: 설정에서 수집 주기를 바꾸면 실행 중인 수집기의 타이머를 재장전하여 **재시작 없이 즉시** 적용됩니다(허용 범위 5~3600초).
 * **사용자 정의 보관 주기**: `30일`, `60일`, `90일`, `180일`, `1년`, `무제한(영구 보관)` 중 선택 가능하며 초과 데이터는 자동 정리됩니다.
 
 ### 5. 가상 분할 로그 통합 뷰어
@@ -57,7 +59,7 @@ Plex 서버의 네트워크 자원 사용량과 미디어 시청 트렌드를 �
 * **대역폭 사용 이력 차트 (Bandwidth History)**:
   * `1시간(1분 단위)`, `3시간(3분 단위)`, `6시간(5분 단위)`, `24시간(15분 단위)` 등 원하는 기간을 선택하여 실시간 트래픽 변동을 직관적인 곡선 그래프로 모니터링할 수 있습니다.
   * **핵심 지표**: 최근 대역폭(Mbps), 최고 피크 대역폭(Mbps), 선택 기간 총 데이터 전송량, 평균 대역폭을 즉시 요약 제공합니다.
-  * **LAN / WAN 자동 분류**: 사설 IP(192.168.x, 10.x, 172.x)와 외부 공인 IP를 자동 판별하여 툴팁으로 내부망/외부망 전송량을 구분 안내합니다.
+  * **LAN / WAN 자동 분류**: 사설 IP(`10.x.x.x`, `192.168.x.x`, `172.16~31.x.x`, 루프백·CGNAT·링크로컬)와 외부 공인 IP를 자동 판별하여 내부망/외부망 전송량을 구분 안내합니다. 판정 기준은 `geoip.ts`의 `isPrivateIp`/`classifyIpScope` 한 곳에서 관리되어 대역폭·소비량 집계가 동일한 결과를 냅니다.
 * **시간대별 접속 피크 바 차트 (Peak Hours)**:
   * 하루 24시간(`00시` ~ `23시`) 중 서버가 가장 붐비는 시간대를 바 차트로 시각화합니다.
   * 최대 혼잡 시간(예: `20시`)과 주요 피크 구간(예: `18시 ~ 21시`)을 자동으로 도출하고, 상위 피크 시간대를 Plex 시그니처 골드 컬러로 하이라이트합니다.
@@ -119,7 +121,12 @@ cd plex-dashboard
 export PORT=32420
 export PLEX_LOG_DIR="/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Logs"
 export PLEX_DB_PATH="/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
+export PLEX_URL="http://127.0.0.1:32400"   # /identity, /photo 트랜스코드 등 로컬 Plex API 주소
+export PLEX_TOKEN=""                      # 포스터/메타데이터 조회용 (선택, 코드에 하드코딩되지 않음)
+export GEOIP_API_URL=""                  # 기본값은 ip-api 무료 티어(HTTP) — HTTPS 제공자를 쓰려면 지정
 ```
+
+대시보드 전용 DB(`data/plex_dashboard.db`)는 첫 실행 시 `data/` 디렉터리까지 자동으로 생성되므로 별도 준비가 필요 없습니다. Plex 서버 식별자(`machineIdentifier`)는 `PLEX_URL/identity`에서 조회하며, 조회에 실패하면 잘못된 Plex Web 딥링크를 만들지 않고 링크만 생략합니다.
 
 ### 3. 서버 실행
 외부 패키지 설치(`npm install` 등)가 필요 없는 제로 디펜던시 구조입니다.
@@ -164,9 +171,10 @@ sudo systemctl status plex-dashboard
 
 ## 🔒 개인정보 및 보안 고려사항
 * **토큰 분리 및 Git 추적 제외**: Plex 인증 토큰(`PLEX_TOKEN`)은 코드 내에 하드코딩되지 않으며, `.gitignore` 처리된 로컬 환경변수 파일(`.env`) 또는 런타임 환경변수로만 안전하게 주입받습니다.
-* **CORS 및 접근 제어**: 무분별한 와일드카드(`*`) CORS를 배제하고 동일 출처(Same-Origin) 및 신뢰된 리버스 프록시(Authelia / Nginx) 환경을 기준으로 동작하며, 상태 변경(POST) 요청에 대해 Origin/Referer 검증을 수행합니다.
+* **CORS 및 접근 제어**: 무분별한 와일드카드(`*`) CORS를 배제하고 동일 출처(Same-Origin) 및 신뢰된 리버스 프록시(Authelia / Nginx) 환경을 기준으로 동작합니다. 상태 변경(POST) 요청은 **`/api/settings`를 포함한 4개 엔드포인트(`/api/settings`, `/api/aliases`, `/api/import-now`, `/api/locations`) 전부** Origin/Referer 검증을 수행하고 실패 시 403을 반환합니다. Origin 호스트 비교는 완전 일치 방식이라 `localhost.evil.com` 같은 접두사 위장 호스트는 통과하지 못합니다.
 * **IP 및 위치 정보 보호**: 수집된 IP는 사설망 및 로컬 루프백 여부를 먼저 검증하며, 외부 GeoIP 호출 시 API 요청 속도를 제한(분당 30회 이하)하고 로컬 SQLite에 영구 캐싱하여 무분별한 외부 전송을 차단합니다.
-* **로컬 번들링**: 대시보드의 오프라인 구동 및 CDN 의존성 제거를 위해 `Chart.js`(v4.5.1, UMD)가 `public/` 디렉터리에 로컬 정적 파일로 포함되어 있습니다.
+* **GeoIP 프라이버시**: 수집된 IP는 사설망·루프백·CGNAT 여부를 먼저 검증하고, 외부 조회는 최소 2초 간격으로 스로틀(분당 30회 이하)하며 결과를 로컬 SQLite에 영구 캐싱합니다. 기본 제공자인 ip-api 무료 티어는 HTTPS를 지원하지 않으므로, 평문 전송을 피하려면 `GEOIP_API_URL`에 HTTPS 제공자를 지정하세요.
+* **번들링 현황**: `Chart.js`(v4.5.1, UMD)는 `public/chart.umd.min.js`로 로컬 포함되어 CDN 없이 동작합니다. 다만 스타일링에 쓰이는 Tailwind CSS는 현재 `cdn.tailwindcss.com`에서 로드되므로, 인터넷이 차단된 완전 오프라인 환경에서는 레이아웃 스타일이 적용되지 않습니다.
 * **데이터베이스 및 로그 격리**: 개인 시청 기록 DB(`data/plex_dashboard.db`) 및 로컬 임시 로그는 `.gitignore` 처리되어 공개 저장소에 일체 업로드되지 않습니다.
 ---
 

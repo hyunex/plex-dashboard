@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { resolveMediaByRatingKey, resolveMediaByPartId } from "./plex_metadata.ts";
+import { resolveMediaByRatingKey, resolveMediaByPartId, resolvePartIdByFilePath } from "./plex_metadata.ts";
 import { type ActivityInsert, saveDeviceProfile, getDeviceProfile } from "./database.ts";
 import { BoundedMap } from "./bounded_map.ts";
 
@@ -71,21 +71,32 @@ export function parseXplex(line: string): XplexInfo {
   };
 }
 
+/** Android UA의 나머지 세그먼트에서 기기 모델명만 추출 (로케일·Build 태그 제거) */
+function extractAndroidModel(rest: string): string {
+  const segments = rest
+    .split(";")
+    .map((part) => part.replace(/\s*Build\/.*$/i, "").trim())
+    .filter(Boolean)
+    .filter((part) => !/^[a-z]{2}[-_][a-z]{2}$/i.test(part)); // en-US, ko-KR 같은 로케일 제거
+  return segments[0] ?? "";
+}
+
 /** UA 문자열 → {기기명, 플랫폼, 제품} 정밀 파싱 */
 export function parseUserAgent(ua: string): { device_name: string; platform: string; product?: string } {
   const s = ua.trim();
-  // Dalvik/2.1.0 (Linux; U; Android ...; SM-F976N ...)
-  let m = s.match(/Dalvik\/[\d.]+ \(Linux; U; Android [\d.]+;\s*([^)]+?)(?:\s+Build|\))/i);
-  if (m) {
-    const model = m[1].trim();
-    return { device_name: model, platform: "Android", product: "Plezy" };
+  // Dalvik/2.1.0 (Linux; U; Android 14; ko-KR; SM-F976N Build/...) → 기기 모델명, 플랫폼: Android
+  // 주의: Plex 공식 Android 앱도 Plezy와 동일한 Dalvik 스택을 쓰므로 여기서 제품을 단정하지 않는다.
+  // 제품은 요청 라인의 X-Plex-Product를 우선하고, 없으면 clientId별 학습 프로필(rememberProfile)로 보완된다.
+  const dalvik = s.match(/^Dalvik\/[\d.]+ \(Linux; U; Android [\d.]+;(.*)\)/i);
+  if (dalvik) {
+    const model = extractAndroidModel(dalvik[1]);
+    return { device_name: model || "Android 기기", platform: "Android" };
   }
-  m = s.match(/Dalvik\/[\d.]+ \(Linux; U; Android [\d.]+;\s*([A-Za-z0-9_-]+)/i);
-  if (m) return { device_name: m[1], platform: "Android", product: "Plezy" };
-  // Plezy / Dart (Flutter HTTP 스택)
-  if (/^Plezy/i.test(s)) return { device_name: "Plezy 앱", platform: "Plezy / Mobile", product: "Plezy" };
-  if (/^Dart/i.test(s)) return { device_name: "Plezy 모바일", platform: "Plezy / Mobile", product: "Plezy" };
-  m = s.match(/Mozilla\/[\d.]+ \(([^;)]+)[^)]*\).*?(Firefox|Chrome|Edg|Safari|OPR)[\/ ]([\d.]+)/i);
+  // Plezy 자체 HTTP 스택
+  if (/^Plezy/i.test(s)) return { device_name: "Plezy 앱", platform: "Mobile", product: "Plezy" };
+  // Flutter/Dart 공통 스택 → 앱을 특정할 수 없으므로 기기명만 유추
+  if (/^Dart/i.test(s)) return { device_name: "Flutter 모바일 앱", platform: "Mobile" };
+  let m = s.match(/Mozilla\/[\d.]+ \(([^;)]+)[^)]*\).*?(Firefox|Chrome|Edg|Safari|OPR)[\/ ]([\d.]+)/i);
   if (m) {
     const os = /Windows/i.test(m[1]) ? "Windows" : /Macintosh|Mac OS/i.test(m[1]) ? "macOS" : m[1];
     return { device_name: `${m[2]} (PC 웹)`, platform: os, product: "Plex Web" };
@@ -95,9 +106,6 @@ export function parseUserAgent(ua: string): { device_name: string; platform: str
   // Plex; 버전; OS → Plex 데스크탑 앱
   m = s.match(/^Plex;\s*([^;]+);\s*(.+)$/i);
   if (m) return { device_name: "Plex 데스크탑 앱", platform: m[2].trim(), product: "Plex" };
-  // Dart/... (Plezy 모바일 앱의 HTTP 스택) → 단독으론 모호, X-Plex 병합 전 임시값
-  if (/^Dart/i.test(s)) return { device_name: "모바일 앱", platform: "Mobile" };
-  if (/^Plezy/i.test(s)) return { device_name: "Plezy 앱", platform: "Mobile", product: "Plezy" };
   const first = s.split(" ")[0] || s;
   return { device_name: first.slice(0, 40), platform: "Device" };
 }
@@ -289,7 +297,7 @@ export class LogParser {
         }
 
         const ctx: RequestContext = {
-          reqId, timestamp, user_name: userName, client_ip: clientIp,
+          reqId, timestamp, user_name: userName, client_ip: clientIp ?? undefined,
           clientId: xplex.clientId || profile.clientId,
           device_name: profile.device_name, platform: profile.platform,
           product: profile.product, client_version: profile.client_version,
@@ -324,7 +332,7 @@ export class LogParser {
         this.cleanupOldRequests();
 
         if (url.includes("/:/websockets/notifications") && userName) {
-          return this.handleConnectEvent(timestamp, userName, clientIp, ctx);
+          return this.handleConnectEvent(timestamp, userName, clientIp ?? undefined, ctx);
         }
       }
     }
@@ -359,28 +367,25 @@ export class LogParser {
       }
     }
 
-    // 1) 대용량 미디어 파일 다운로드 / 스트리밍 시작 감지 (Content-Length)
+    // 1) 대용량 미디어 파일 다운로드/스트리밍 시작 감지 (Content-Length)
+    // Plezy 등에서 2~3GB 파일을 직접 받을 때는 Completed 라인 없이 수 분간 전송되므로 시작 시점에 기록한다.
     if (line.includes("Content-Length of ") && line.includes(" (of total: ")) {
       const clMatch = line.match(/Content-Length of (.*?) is (\d+) \(of total: (\d+)\)/);
       if (clMatch) {
-        const bytes = parseInt(clMatch[3] || clMatch[2], 10);
+        const [, mediaPath, currentLengthStr, totalLengthStr] = clMatch;
+        const currentLength = parseInt(currentLengthStr, 10) || 0;
+        const totalLength = parseInt(totalLengthStr, 10) || 0;
+        const bytes = Math.max(totalLength, currentLength);
         if (bytes > 5 * 1024 * 1024) {
-          const threadMatch = line.match(/\[(\d+)\]/);
-          const threadId = threadMatch?.[1];
-          let ctx = threadId ? this.activeRequestsByThread.get(threadId) : null;
-          if (!ctx) {
-            for (const c of this.activeRequestsByPart.values()) {
-              if (c.partId && !c.downloadEmitted) {
-                ctx = c;
-                break;
-              }
+          const owner = this.findDownloadContext(threadId, mediaPath);
+          if (owner && owner.partId && !owner.downloadEmitted) {
+            this.backfillProfile(owner);
+            const act = this.finalizeRequestEvent(owner, bytes, timestamp);
+            if (act) {
+              // 이후 도착하는 Completed 라인에서 같은 전송을 다시 기록하지 않도록 표시
+              owner.downloadEmitted = true;
+              return act;
             }
-          }
-          if (ctx && ctx.partId && !ctx.downloadEmitted) {
-            ctx.downloadEmitted = true;
-            this.backfillProfile(ctx);
-            const act = this.finalizeRequestEvent(ctx, bytes, timestamp);
-            if (act) return act;
           }
         }
       }
@@ -391,18 +396,44 @@ export class LogParser {
       if (compMatch) {
         const ctx = this.activeRequests.get(compMatch[1]);
         if (ctx) {
+          this.activeRequests.delete(compMatch[1]);
+          // 전송 시작 시점에 이미 DOWNLOAD로 기록된 요청은 완료 라인에서 중복 생성하지 않는다.
+          if (ctx.downloadEmitted) return null;
           const bytesMatch = compMatch[2].match(/(\d+)\s+bytes/);
           const bytes = bytesMatch ? parseInt(bytesMatch[1], 10) : 0;
           // Completed 라인에도 Range 표기가 있으면 반영
           if (/range:/i.test(compMatch[2])) ctx.hasRange = true;
           this.backfillProfile(ctx);
-          const act = this.finalizeRequestEvent(ctx, bytes, timestamp);
-          this.activeRequests.delete(compMatch[1]);
-          return act;
+          return this.finalizeRequestEvent(ctx, bytes, timestamp);
         }
       }
     }
     return null;
+  }
+
+  /**
+   * Content-Length 라인에는 요청 ID가 없다. 소유 세션을 다음 우선순위로 특정한다.
+   * 1) 로그의 파일 경로를 Plex DB의 partId로 역추적해 정확히 매칭 (동시 다운로드 오귀속 방지)
+   * 2) 같은 워커 스레드에서 시작된 part 요청
+   * 3) 최후 폴백: 아직 기록되지 않은 part 요청 중 가장 최근에 시작된 1건 (기존 구현은 Map 삽입 순서상 첫 항목을 임의로 선택했다)
+   */
+  private findDownloadContext(threadId: string | undefined, mediaPath: string): RequestContext | null {
+    const partIdFromPath = mediaPath ? resolvePartIdByFilePath(mediaPath) : null;
+    if (partIdFromPath) {
+      const byPart = this.activeRequestsByPart.get(partIdFromPath);
+      if (byPart && !byPart.downloadEmitted) return byPart;
+    }
+    if (threadId) {
+      const byThread = this.activeRequestsByThread.get(threadId);
+      if (byThread?.partId && !byThread.downloadEmitted) return byThread;
+    }
+    let latest: RequestContext | null = null;
+    for (const candidate of this.activeRequestsByPart.values()) {
+      if (!candidate.partId || candidate.downloadEmitted) continue;
+      // 동일 ms에 생성된 경우에도 삽입 순서상 뒤(최근) 항목이 선택되도록 >= 로 비교한다.
+      if (!latest || candidate.createdAt >= latest.createdAt) latest = candidate;
+    }
+    return latest;
   }
 
   private handleConnectEvent(timestamp: string, userName: string, clientIp: string | undefined, ctx: RequestContext): ActivityInsert | null {
