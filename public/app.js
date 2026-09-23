@@ -24,6 +24,15 @@ const state = {
   isLoadingPast: false,
   liveTailInterval: null,
   isLiveTailActive: false,
+
+  // 분석 (Analytics) 상태
+  analytics: {
+    bandwidthRange: "1h",
+    peakSource: "activity",
+    bandwidthChart: null,
+    peakHoursChart: null,
+    isLoading: false,
+  },
 };
 
 // DOM 요소 캐시
@@ -88,6 +97,28 @@ const el = {
   btnCloseAliases: document.getElementById("btn-close-aliases"),
   btnCancelAliases: document.getElementById("btn-cancel-aliases"),
   btnSaveAliases: document.getElementById("btn-save-aliases"),
+
+  // 분석 (Analytics) 요소
+  navAnalytics: document.getElementById("nav-analytics"),
+  btnMobileNavAnalytics: document.getElementById("btn-mobile-nav-analytics"),
+  viewAnalytics: document.getElementById("view-analytics"),
+  btnRefreshAnalytics: document.getElementById("btn-refresh-analytics"),
+  bandwidthRangeSelector: document.getElementById("bandwidth-range-selector"),
+  bwStatCurrent: document.getElementById("bw-stat-current"),
+  bwStatPeak: document.getElementById("bw-stat-peak"),
+  bwStatTotal: document.getElementById("bw-stat-total"),
+  bwStatAvg: document.getElementById("bw-stat-avg"),
+  peakSourceSelector: document.getElementById("peak-source-selector"),
+  peakHourBadge: document.getElementById("peak-hour-badge"),
+  peakWindowBadge: document.getElementById("peak-window-badge"),
+  topContentList: document.getElementById("top-content-list"),
+  monthlyLabelBadge: document.getElementById("monthly-label-badge"),
+  monthlyTotalBytes: document.getElementById("monthly-total-bytes"),
+  monthlyWanBytes: document.getElementById("monthly-wan-bytes"),
+  monthlyLanBytes: document.getElementById("monthly-lan-bytes"),
+  monthlyActiveUsers: document.getElementById("monthly-active-users"),
+  monthlyAvgUser: document.getElementById("monthly-avg-user"),
+  monthlyUsersList: document.getElementById("monthly-users-list"),
 };
 
 // 1. 초기화
@@ -102,7 +133,11 @@ async function init() {
 // 실측 뷰포트: 모바일 주소창/툴바/노치 변화에 맞춰 body 높이를 px로 고정
 function initMeasuredViewport() {
   const visibleContainer = () =>
-    state.currentView === "logs" ? el.logTerminal : el.activityList;
+    state.currentView === "logs"
+      ? el.logTerminal
+      : state.currentView === "analytics"
+      ? el.viewAnalytics
+      : el.activityList;
   const reAnchorVisible = () => {
     const c = visibleContainer();
     if (c && !c.classList.contains("hidden")) anchorToBottom(c);
@@ -211,26 +246,100 @@ function bindEvents() {
   });
   if (el.btnOpenAliasesMobile) el.btnOpenAliasesMobile.addEventListener("click", openAliasModal);
   if (el.btnOpenSettingsMobile) el.btnOpenSettingsMobile.addEventListener("click", openSettingsModal);
+
+  // 분석 (Analytics) 탭 및 컨트롤 이벤트
+  if (el.navAnalytics) {
+    el.navAnalytics.addEventListener("click", () => switchView("analytics"));
+  }
+  if (el.btnMobileNavAnalytics) {
+    el.btnMobileNavAnalytics.addEventListener("click", () => {
+      switchView("analytics");
+      closeMobileSidebar();
+    });
+  }
+  if (el.btnRefreshAnalytics) {
+    el.btnRefreshAnalytics.addEventListener("click", () => loadAnalytics(true));
+  }
+  if (el.bandwidthRangeSelector) {
+    el.bandwidthRangeSelector.addEventListener("click", (e) => {
+      const btn = e.target.closest(".bw-range-btn");
+      if (!btn) return;
+      const range = btn.dataset.range;
+      if (range && range !== state.analytics.bandwidthRange) {
+        state.analytics.bandwidthRange = range;
+        updateBandwidthRangeButtons();
+        loadBandwidthData();
+      }
+    });
+  }
+  if (el.peakSourceSelector) {
+    el.peakSourceSelector.addEventListener("click", (e) => {
+      const btn = e.target.closest(".peak-src-btn");
+      if (!btn) return;
+      const src = btn.dataset.source;
+      if (src && src !== state.analytics.peakSource) {
+        state.analytics.peakSource = src;
+        updatePeakSourceButtons();
+        loadPeakHoursData();
+      }
+    });
+  }
 }
 
 // 3. 뷰 전환
 function switchView(viewName) {
   state.currentView = viewName;
 
+  // 모든 뷰 숨김
+  el.viewDashboard.classList.add("hidden");
+  el.viewLogs.classList.add("hidden");
+  if (el.viewAnalytics) el.viewAnalytics.classList.add("hidden");
+
+  // 네비게이션 버튼 초기화
+  const navInactive =
+    "w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-gray-800/60 hover:text-gray-200 transition-colors";
+  const navActive =
+    "w-full flex items-center space-x-3 px-3 py-2 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors";
+
+  el.navDashboard.className = navInactive;
+  if (el.navAnalytics) el.navAnalytics.className = navInactive;
+
+  // 모바일 탑바 버튼 초기화
+  if (el.btnMobileNavDashboard) {
+    el.btnMobileNavDashboard.className =
+      viewName === "dashboard"
+        ? "px-2.5 py-1 text-xs rounded-md bg-plex/10 text-plex hover:bg-plex/20 transition-colors flex items-center space-x-1"
+        : "px-2.5 py-1 text-xs rounded-md text-gray-400 hover:text-plex transition-colors flex items-center space-x-1";
+  }
+  if (el.btnMobileNavAnalytics) {
+    el.btnMobileNavAnalytics.className =
+      viewName === "analytics"
+        ? "px-2.5 py-1 text-xs rounded-md bg-plex/10 text-plex hover:bg-plex/20 transition-colors flex items-center space-x-1"
+        : "px-2.5 py-1 text-xs rounded-md text-gray-400 hover:text-plex transition-colors flex items-center space-x-1";
+  }
+
+  // 사이드바 로그 active 표시 해제
+  document.querySelectorAll(".nav-log-btn").forEach((btn) => {
+    btn.className =
+      "nav-log-btn w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-gray-800/80 hover:text-gray-200 transition-colors text-left";
+  });
+
   if (viewName === "dashboard") {
     el.viewDashboard.classList.remove("hidden");
-    el.viewLogs.classList.add("hidden");
-    el.navDashboard.className =
-      "w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors";
+    el.navDashboard.className = navActive;
     stopLiveTail();
     if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
     if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
     requestAnimationFrame(() => anchorToBottom(el.activityList));
+  } else if (viewName === "analytics") {
+    if (el.viewAnalytics) el.viewAnalytics.classList.remove("hidden");
+    if (el.navAnalytics) el.navAnalytics.className = navActive;
+    stopLiveTail();
+    if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
+    if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
+    loadAnalytics();
   } else {
-    el.viewDashboard.classList.add("hidden");
     el.viewLogs.classList.remove("hidden");
-    el.navDashboard.className =
-      "w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-gray-400 hover:bg-gray-800/60 hover:text-gray-200 transition-colors";
     if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
     if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
     requestAnimationFrame(() => anchorToBottom(el.logTerminal));
@@ -932,5 +1041,435 @@ function formatBytes(bytes) {
   return `${val} ${units[i]}`;
 }
 
+
+function formatMbps(mbps) {
+  if (!mbps || mbps < 0.01) return "0.00 Mbps";
+  if (mbps >= 1000) return `${(mbps / 1000).toFixed(2)} Gbps`;
+  return `${mbps.toFixed(2)} Mbps`;
+}
+
+// ==========================================
+// 13. 서버 통계 & 분석 (Analytics) 모듈
+// ==========================================
+
+async function loadAnalytics(isRefresh = false) {
+  if (state.analytics.isLoading) return;
+  state.analytics.isLoading = true;
+
+  if (isRefresh && el.btnRefreshAnalytics) {
+    el.btnRefreshAnalytics.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> <span class="hidden sm:inline">로딩 중...</span>`;
+  }
+
+  try {
+    const range = state.analytics.bandwidthRange || "1h";
+    const source = state.analytics.peakSource || "activity";
+    const res = await fetch(`/api/analytics/all?range=${range}&source=${source}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    if (data.bandwidth) {
+      renderBandwidthChart(data.bandwidth);
+    }
+    if (data.peakHours) {
+      renderPeakHoursChart(data.peakHours);
+    }
+    if (data.topContent) {
+      renderTopContent(data.topContent);
+    }
+    if (data.monthlyUsers) {
+      renderMonthlyUsers(data.monthlyUsers);
+    }
+  } catch (err) {
+    console.error("통계 데이터 로드 실패:", err);
+  } finally {
+    state.analytics.isLoading = false;
+    if (el.btnRefreshAnalytics) {
+      el.btnRefreshAnalytics.innerHTML = `<i class="fa-solid fa-rotate-right text-[10px]"></i> <span class="hidden sm:inline">새로고침</span>`;
+    }
+  }
+}
+
+async function loadBandwidthData() {
+  try {
+    const range = state.analytics.bandwidthRange || "1h";
+    const res = await fetch(`/api/analytics/bandwidth?range=${range}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderBandwidthChart(data);
+  } catch (err) {
+    console.error("대역폭 데이터 갱신 실패:", err);
+  }
+}
+
+async function loadPeakHoursData() {
+  try {
+    const src = state.analytics.peakSource || "activity";
+    const res = await fetch(`/api/analytics/peak-hours?source=${src}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderPeakHoursChart(data);
+  } catch (err) {
+    console.error("피크 시간대 데이터 갱신 실패:", err);
+  }
+}
+
+function updateBandwidthRangeButtons() {
+  if (!el.bandwidthRangeSelector) return;
+  const btns = el.bandwidthRangeSelector.querySelectorAll(".bw-range-btn");
+  btns.forEach((b) => {
+    if (b.dataset.range === state.analytics.bandwidthRange) {
+      b.className = "bw-range-btn px-2.5 py-1 text-xs rounded-md font-semibold transition-colors bg-plex text-black";
+    } else {
+      b.className = "bw-range-btn px-2.5 py-1 text-xs rounded-md font-medium transition-colors text-gray-400 hover:text-white";
+    }
+  });
+}
+
+function updatePeakSourceButtons() {
+  if (!el.peakSourceSelector) return;
+  const btns = el.peakSourceSelector.querySelectorAll(".peak-src-btn");
+  btns.forEach((b) => {
+    if (b.dataset.source === state.analytics.peakSource) {
+      b.className = "peak-src-btn px-2 py-0.5 text-[11px] rounded font-semibold transition-colors bg-plex text-black";
+    } else {
+      b.className = "peak-src-btn px-2 py-0.5 text-[11px] rounded font-medium transition-colors text-gray-400 hover:text-white";
+    }
+  });
+}
+
+// 1) 대역폭 차트 렌더링
+function renderBandwidthChart(data) {
+  if (!data || !data.summary || !data.points) return;
+
+  // 요약 지표 업데이트
+  if (el.bwStatCurrent) el.bwStatCurrent.innerText = formatMbps(data.summary.current_mbps);
+  if (el.bwStatPeak) el.bwStatPeak.innerText = formatMbps(data.summary.peak_mbps);
+  if (el.bwStatTotal) el.bwStatTotal.innerText = data.summary.total_bytes_formatted;
+  if (el.bwStatAvg) el.bwStatAvg.innerText = formatMbps(data.summary.avg_mbps);
+
+  const canvas = document.getElementById("chart-bandwidth");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  if (state.analytics.bandwidthChart) {
+    state.analytics.bandwidthChart.destroy();
+    state.analytics.bandwidthChart = null;
+  }
+
+  const ctx = canvas.getContext("2d");
+  const gradient = ctx.createLinearGradient(0, 0, 0, 240);
+  gradient.addColorStop(0, "rgba(229, 160, 13, 0.40)");
+  gradient.addColorStop(0.7, "rgba(229, 160, 13, 0.06)");
+  gradient.addColorStop(1, "rgba(229, 160, 13, 0.0)");
+
+  const labels = data.points.map((p) => p.time_label);
+  const values = data.points.map((p) => p.total_mbps);
+  const rawBytes = data.points.map((p) => p.total_bytes);
+
+  state.analytics.bandwidthChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "대역폭",
+          data: values,
+          borderColor: "#e5a00d",
+          backgroundColor: gradient,
+          fill: true,
+          tension: 0.35,
+          borderWidth: 2,
+          pointRadius: data.points.length > 70 ? 0 : 2,
+          pointHoverRadius: 5,
+          pointBackgroundColor: "#e5a00d",
+          pointHoverBackgroundColor: "#ffffff",
+          pointHoverBorderColor: "#e5a00d",
+          pointHoverBorderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: "index",
+        intersect: false,
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "#161b22",
+          borderColor: "#374151",
+          borderWidth: 1,
+          titleColor: "#f3f4f6",
+          titleFont: { size: 11, weight: "bold" },
+          bodyColor: "#d1d5db",
+          bodyFont: { size: 11, family: "ui-monospace, monospace" },
+          padding: 10,
+          cornerRadius: 8,
+          displayColors: false,
+          callbacks: {
+            label: (context) => {
+              const idx = context.dataIndex;
+              const mbps = context.parsed.y;
+              const bytes = rawBytes[idx] || 0;
+              return `대역폭: ${mbps.toFixed(2)} Mbps (${formatBytes(bytes)})`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: {
+            color: "rgba(255, 255, 255, 0.04)",
+            drawBorder: false,
+          },
+          ticks: {
+            color: "#9ca3af",
+            font: { size: 10 },
+            maxTicksLimit: 12,
+            maxRotation: 0,
+          },
+        },
+        y: {
+          beginAtZero: true,
+          grid: {
+            color: "rgba(255, 255, 255, 0.06)",
+            drawBorder: false,
+          },
+          ticks: {
+            color: "#9ca3af",
+            font: { size: 10 },
+            callback: (val) => `${val} Mbps`,
+          },
+        },
+      },
+    },
+  });
+}
+
+// 2) 피크 타임 바 차트 렌더링 (00시 ~ 23시)
+function renderPeakHoursChart(data) {
+  if (!data || !data.hours || !data.summary) return;
+
+  if (el.peakHourBadge) el.peakHourBadge.innerText = data.summary.peak_hour_label;
+  if (el.peakWindowBadge) el.peakWindowBadge.innerText = data.summary.busiest_window;
+
+  const canvas = document.getElementById("chart-peak-hours");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  if (state.analytics.peakHoursChart) {
+    state.analytics.peakHoursChart.destroy();
+    state.analytics.peakHoursChart = null;
+  }
+
+  const labels = data.hours.map((h) => h.hour_label);
+  const values = data.hours.map((h) => h.total_count);
+  const bgColors = data.hours.map((h) =>
+    h.is_peak ? "rgba(229, 160, 13, 0.9)" : "rgba(100, 116, 139, 0.45)"
+  );
+  const borderColors = data.hours.map((h) =>
+    h.is_peak ? "#e5a00d" : "rgba(148, 163, 184, 0.6)"
+  );
+
+  const ctx = canvas.getContext("2d");
+  state.analytics.peakHoursChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "활동 횟수",
+          data: values,
+          backgroundColor: bgColors,
+          borderColor: borderColors,
+          borderWidth: 1,
+          borderRadius: 4,
+          borderSkipped: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "#161b22",
+          borderColor: "#374151",
+          borderWidth: 1,
+          titleColor: "#f3f4f6",
+          titleFont: { size: 11, weight: "bold" },
+          bodyColor: "#d1d5db",
+          bodyFont: { size: 11 },
+          padding: 10,
+          cornerRadius: 8,
+          displayColors: false,
+          callbacks: {
+            label: (context) => {
+              const idx = context.dataIndex;
+              const h = data.hours[idx];
+              const peakTag = h.is_peak ? " [주요 피크 시간대]" : "";
+              return [
+                `활동 건수: ${h.total_count}건${peakTag}`,
+                `시청 횟수: ${h.play_count}회 · 사용자: ${h.user_count}명`,
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            color: "#9ca3af",
+            font: { size: 9 },
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 12,
+          },
+        },
+        y: {
+          beginAtZero: true,
+          grid: {
+            color: "rgba(255, 255, 255, 0.05)",
+            drawBorder: false,
+          },
+          ticks: {
+            color: "#9ca3af",
+            font: { size: 10 },
+            precision: 0,
+          },
+        },
+      },
+    },
+  });
+}
+
+// 3) 최근 30일간 최다 재생 콘텐츠 Top 10 렌더링
+function renderTopContent(items) {
+  if (!el.topContentList) return;
+
+  if (!items || items.length === 0) {
+    el.topContentList.innerHTML = `
+      <div class="p-8 text-center text-gray-500 text-xs">
+        <i class="fa-solid fa-film text-2xl mb-2 text-gray-600 block"></i>
+        최근 30일간 시청된 미디어가 없습니다.
+      </div>
+    `;
+    return;
+  }
+
+  const html = items.map((item) => {
+    let rankBadge = "";
+    if (item.rank === 1) {
+      rankBadge = `<span class="w-5 h-5 rounded-full bg-yellow-500/20 text-yellow-400 font-bold text-xs flex items-center justify-center border border-yellow-500/40">1</span>`;
+    } else if (item.rank === 2) {
+      rankBadge = `<span class="w-5 h-5 rounded-full bg-slate-300/20 text-slate-200 font-bold text-xs flex items-center justify-center border border-slate-300/40">2</span>`;
+    } else if (item.rank === 3) {
+      rankBadge = `<span class="w-5 h-5 rounded-full bg-amber-700/20 text-amber-500 font-bold text-xs flex items-center justify-center border border-amber-600/40">3</span>`;
+    } else {
+      rankBadge = `<span class="w-5 h-5 rounded-full bg-gray-800 text-gray-400 font-medium text-xs flex items-center justify-center">${item.rank}</span>`;
+    }
+
+    let typeBadge = "";
+    if (item.type_label === "영화") {
+      typeBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/15 text-purple-400 border border-purple-500/20">영화</span>`;
+    } else if (item.type_label === "드라마/시리즈") {
+      typeBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/15 text-blue-400 border border-blue-500/20">시리즈</span>`;
+    } else {
+      typeBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">${escapeHtml(item.type_label)}</span>`;
+    }
+
+    let thumbHtml = "";
+    if (item.thumb_url) {
+      thumbHtml = `<img src="${escapeHtml(item.thumb_url)}" alt="" class="w-8 h-10 object-cover rounded shadow flex-shrink-0 bg-gray-800" onerror="this.remove()" />`;
+    } else {
+      const icon = item.type_label === "영화" ? "fa-film" : "fa-tv";
+      thumbHtml = `<div class="w-8 h-10 rounded bg-[#0e1117] border border-gray-800 flex items-center justify-center text-gray-500 flex-shrink-0 text-xs"><i class="fa-solid ${icon}"></i></div>`;
+    }
+
+    return `
+      <div class="bg-[#0e1117] border border-gray-800/80 rounded-lg p-2.5 flex items-center space-x-3 text-xs hover:border-gray-700 transition-colors">
+        ${rankBadge}
+        ${thumbHtml}
+        <div class="min-w-0 flex-1 space-y-1">
+          <div class="flex items-center space-x-1.5 flex-wrap">
+            <span class="font-bold text-white truncate text-xs">${escapeHtml(item.title)}</span>
+            ${typeBadge}
+          </div>
+          <div class="w-full bg-gray-800/80 rounded-full h-1.5 overflow-hidden">
+            <div class="bg-plex h-1.5 rounded-full" style="width: ${Math.max(4, item.percentage)}%"></div>
+          </div>
+          <div class="flex items-center justify-between text-[11px] text-gray-400">
+            <span><strong class="text-plex font-bold">${item.play_count}회</strong> 시청 · ${item.viewer_count}명</span>
+            <span class="text-gray-500 text-[10px]">${item.last_played_at.slice(5, 16)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  el.topContentList.innerHTML = html;
+}
+
+// 4) 이번 달 사용자별 추정 데이터 사용량 렌더링
+function renderMonthlyUsers(data) {
+  if (!data || !data.summary || !data.users) return;
+
+  if (el.monthlyLabelBadge) el.monthlyLabelBadge.innerText = data.month_label;
+  if (el.monthlyTotalBytes) el.monthlyTotalBytes.innerText = data.summary.total_bytes_formatted;
+  if (el.monthlyWanBytes) el.monthlyWanBytes.innerText = data.summary.wan_bytes_formatted;
+  if (el.monthlyLanBytes) el.monthlyLanBytes.innerText = data.summary.lan_bytes_formatted;
+  if (el.monthlyActiveUsers) el.monthlyActiveUsers.innerText = `${data.summary.active_users}명`;
+  if (el.monthlyAvgUser) el.monthlyAvgUser.innerText = data.summary.avg_per_user;
+
+  if (!el.monthlyUsersList) return;
+
+  if (data.users.length === 0) {
+    el.monthlyUsersList.innerHTML = `
+      <div class="p-8 text-center text-gray-500 text-xs">
+        이번 달 데이터 전송 통계가 없습니다.
+      </div>
+    `;
+    return;
+  }
+
+  const html = data.users.map((u) => {
+    const initial = u.display_name.charAt(0).toUpperCase();
+    const aliasHtml = u.alias ? `<span class="text-[10px] text-gray-400">(${escapeHtml(u.user_name)})</span>` : "";
+
+    return `
+      <div class="bg-[#0e1117] border border-gray-800/80 rounded-lg p-3 text-xs space-y-2 hover:border-gray-700 transition-colors">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2.5 min-w-0">
+            <span class="w-5 text-center text-gray-500 font-bold text-xs">${u.rank}</span>
+            <div class="w-6 h-6 rounded bg-gray-800 text-white font-bold flex items-center justify-center text-[11px] flex-shrink-0">${initial}</div>
+            <div class="truncate">
+              <span class="font-bold text-white">${escapeHtml(u.alias || u.user_name)}</span>
+              ${aliasHtml}
+            </div>
+          </div>
+          <div class="text-right flex-shrink-0">
+            <span class="font-mono font-bold text-plex text-sm">${u.total_bytes_formatted}</span>
+            <span class="text-[10px] text-gray-400 ml-1 font-mono">(${u.percentage}%)</span>
+          </div>
+        </div>
+
+        <!-- 점유율 프로그레스 바 -->
+        <div class="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
+          <div class="bg-gradient-to-r from-plex to-amber-500 h-1.5 rounded-full" style="width: ${Math.max(2, u.percentage)}%"></div>
+        </div>
+
+        <!-- WAN vs LAN 세부 전송량 -->
+        <div class="flex items-center justify-between text-[10px] text-gray-500">
+          <span>외부 (WAN): <strong class="text-amber-400/90">${u.wan_bytes_formatted}</strong></span>
+          <span>내부 (LAN): <strong class="text-gray-400">${u.lan_bytes_formatted}</strong></span>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  el.monthlyUsersList.innerHTML = html;
+}
 // 앱 실행
 document.addEventListener("DOMContentLoaded", init);

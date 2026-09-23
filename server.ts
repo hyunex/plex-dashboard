@@ -11,6 +11,12 @@ import {
   cleanupExpiredLogs,
 } from "./database.ts";
 import {
+  getBandwidthHistory,
+  getPeakHours,
+  getTop10PlayedContent,
+  getMonthlyUserConsumption,
+} from "./analytics.ts";
+import {
   getAvailableLogGroups,
   readUnifiedLogLines,
   LogCollector,
@@ -128,6 +134,48 @@ const server = Bun.serve({
       const stats = getDashboardStats();
       return jsonResponse(stats);
     }
+    // 3-1. 대역폭 이력 통계 API (1h / 3h / 6h / 24h)
+    if (pathname === "/api/analytics/bandwidth" && req.method === "GET") {
+      const rawRange = url.searchParams.get("range") || "1h";
+      const range = (rawRange === "3h" || rawRange === "6h" || rawRange === "24h") ? rawRange : "1h";
+      const data = getBandwidthHistory(range);
+      return jsonResponse(data);
+    }
+
+    // 3-2. 시간대별 피크 타임 API (00시 ~ 23시)
+    if (pathname === "/api/analytics/peak-hours" && req.method === "GET") {
+      const rawSource = url.searchParams.get("source");
+      const source = rawSource === "views30d" ? "views30d" : "activity";
+      const data = getPeakHours(source);
+      return jsonResponse(data);
+    }
+
+    // 3-3. 최근 30일간 최다 재생 콘텐츠 Top 10 API
+    if (pathname === "/api/analytics/top-content" && req.method === "GET") {
+      const data = getTop10PlayedContent();
+      return jsonResponse(data);
+    }
+
+    // 3-4. 이번 달 사용자별 추정 데이터 사용량 API
+    if (pathname === "/api/analytics/monthly-users" && req.method === "GET") {
+      const data = getMonthlyUserConsumption();
+      return jsonResponse(data);
+    }
+
+    // 3-5. 분석 대시보드 전체 일괄 조회 API
+    if (pathname === "/api/analytics/all" && req.method === "GET") {
+      const rawRange = url.searchParams.get("range") || "1h";
+      const range = (rawRange === "3h" || rawRange === "6h" || rawRange === "24h") ? rawRange : "1h";
+      const rawSource = url.searchParams.get("source");
+      const source = rawSource === "views30d" ? "views30d" : "activity";
+      return jsonResponse({
+        bandwidth: getBandwidthHistory(range),
+        peakHours: getPeakHours(source),
+        topContent: getTop10PlayedContent(),
+        monthlyUsers: getMonthlyUserConsumption(),
+      });
+    }
+
 
     // 4. 로그 그룹 목록 API
     if (pathname === "/api/log-groups" && req.method === "GET") {

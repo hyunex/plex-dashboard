@@ -38,14 +38,16 @@ body {
 
 /* 스크롤 컨테이너: 바운스 전파 차단 + 하단 앵커 여유(정확한 값은 하단 spacer가 담당) */
 #activity-list,
-#log-terminal {
+#log-terminal,
+#view-analytics {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   scroll-padding-bottom: 24px;
   min-height: 0;
 }
 #activity-bottom-spacer,
-#log-bottom-spacer {
+#log-bottom-spacer,
+#analytics-bottom-spacer {
   height: calc(28px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
   pointer-events: none;

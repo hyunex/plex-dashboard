@@ -1,0 +1,619 @@
+import { Database } from "bun:sqlite";
+import { join } from "path";
+import { db, getAliases } from "./database.ts";
+
+const PLEX_DB_PATH =
+  process.env.PLEX_DB_PATH ||
+  "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db";
+
+let plexDb: Database | null = null;
+try {
+  plexDb = new Database(PLEX_DB_PATH, { readonly: true });
+  plexDb.run("PRAGMA query_only = ON;");
+} catch (err) {
+  console.warn("[Analytics] Plex SQLite DB 연결 실패 (읽기 전용):", err);
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i >= 2 ? 2 : 1)} ${units[i]}`;
+}
+
+export function formatMbps(mbps: number): string {
+  if (mbps < 0.01) return "0.00 Mbps";
+  if (mbps >= 1000) return `${(mbps / 1000).toFixed(2)} Gbps`;
+  return `${mbps.toFixed(2)} Mbps`;
+}
+
+// 1. 대역폭 이력 차트 데이터 (1h / 3h / 6h / 24h)
+export interface BandwidthPoint {
+  time_label: string; // e.g. "20:45" or "09/23 20:45"
+  total_bytes: number;
+  total_mbps: number;
+  lan_bytes: number;
+  lan_mbps: number;
+  wan_bytes: number;
+  wan_mbps: number;
+}
+
+export interface BandwidthHistoryResult {
+  range: "1h" | "3h" | "6h" | "24h";
+  summary: {
+    current_mbps: number;
+    peak_mbps: number;
+    avg_mbps: number;
+    total_bytes: number;
+    total_bytes_formatted: string;
+    lan_bytes: number;
+    lan_bytes_formatted: string;
+    wan_bytes: number;
+    wan_bytes_formatted: string;
+  };
+  points: BandwidthPoint[];
+}
+
+export function getBandwidthHistory(range: "1h" | "3h" | "6h" | "24h"): BandwidthHistoryResult {
+  let minutes = 60;
+  let bucketMinutes = 1;
+  let sqlInterval = "-1 hour";
+
+  if (range === "3h") {
+    minutes = 180;
+    bucketMinutes = 3;
+    sqlInterval = "-3 hours";
+  } else if (range === "6h") {
+    minutes = 360;
+    bucketMinutes = 5;
+    sqlInterval = "-6 hours";
+  } else if (range === "24h") {
+    minutes = 1440;
+    bucketMinutes = 15;
+    sqlInterval = "-24 hours";
+  }
+
+  const bucketSeconds = bucketMinutes * 60;
+
+  // DB에서 구간 내 데이터 추출
+  const rows = db.query(`
+    SELECT
+      timestamp,
+      file_size_bytes,
+      client_ip
+    FROM activity_logs
+    WHERE timestamp >= datetime('now', 'localtime', ?) AND file_size_bytes > 0
+    ORDER BY timestamp ASC
+  `).all(sqlInterval) as Array<{ timestamp: string; file_size_bytes: number; client_ip: string | null }>;
+
+  // 시간 슬롯 버킷 초기화 (균등한 시계열 생성)
+  const now = new Date();
+  const bucketCount = Math.ceil(minutes / bucketMinutes);
+  const buckets: Map<number, { lan: number; wan: number; total: number }> = new Map();
+
+  // now 기준으로 과거 bucketCount개의 버킷 생성
+  const bucketStartTimes: Date[] = [];
+  const msInBucket = bucketMinutes * 60 * 1000;
+  const currentBucketKey = Math.floor(now.getTime() / msInBucket) * msInBucket;
+
+  for (let i = bucketCount - 1; i >= 0; i--) {
+    const key = currentBucketKey - i * msInBucket;
+    buckets.set(key, { lan: 0, wan: 0, total: 0 });
+    bucketStartTimes.push(new Date(key));
+  }
+
+  // 데이터 각 버킷에 할당
+  for (const r of rows) {
+    // timestamp: "YYYY-MM-DD HH:MM:SS"
+    const t = new Date(r.timestamp.replace(" ", "T")).getTime();
+    if (isNaN(t)) continue;
+    const key = Math.floor(t / msInBucket) * msInBucket;
+    const b = buckets.get(key);
+    if (b) {
+      const bytes = r.file_size_bytes;
+      b.total += bytes;
+      const ip = r.client_ip || "";
+      const isLan =
+        ip.startsWith("192.168.") ||
+        ip.startsWith("10.") ||
+        ip.startsWith("172.") ||
+        ip.startsWith("127.");
+      if (isLan) {
+        b.lan += bytes;
+      } else {
+        b.wan += bytes;
+      }
+    }
+  }
+
+  let peakMbps = 0;
+  let totalBytes = 0;
+  let lanBytes = 0;
+  let wanBytes = 0;
+  const points: BandwidthPoint[] = [];
+
+  for (const t of bucketStartTimes) {
+    const key = t.getTime();
+    const data = buckets.get(key) || { lan: 0, wan: 0, total: 0 };
+    totalBytes += data.total;
+    lanBytes += data.lan;
+    wanBytes += data.wan;
+
+    // Mbps = (bytes * 8) / (bucketSeconds * 1,000,000)
+    const totalMbps = Number(((data.total * 8) / (bucketSeconds * 1000000)).toFixed(2));
+    const lanMbps = Number(((data.lan * 8) / (bucketSeconds * 1000000)).toFixed(2));
+    const wanMbps = Number(((data.wan * 8) / (bucketSeconds * 1000000)).toFixed(2));
+
+    if (totalMbps > peakMbps) peakMbps = totalMbps;
+
+    let timeLabel = "";
+    if (range === "24h") {
+      const m = String(t.getMonth() + 1).padStart(2, "0");
+      const d = String(t.getDate()).padStart(2, "0");
+      const hh = String(t.getHours()).padStart(2, "0");
+      const mm = String(t.getMinutes()).padStart(2, "0");
+      timeLabel = `${m}/${d} ${hh}:${mm}`;
+    } else {
+      const hh = String(t.getHours()).padStart(2, "0");
+      const mm = String(t.getMinutes()).padStart(2, "0");
+      timeLabel = `${hh}:${mm}`;
+    }
+
+    points.push({
+      time_label: timeLabel,
+      total_bytes: data.total,
+      total_mbps: totalMbps,
+      lan_bytes: data.lan,
+      lan_mbps: lanMbps,
+      wan_bytes: data.wan,
+      wan_mbps: wanMbps,
+    });
+  }
+
+  const currentMbps = points.length > 0 ? points[points.length - 1].total_mbps : 0;
+  const avgMbps = points.length > 0
+    ? Number(((totalBytes * 8) / (minutes * 60 * 1000000)).toFixed(2))
+    : 0;
+
+  return {
+    range,
+    summary: {
+      current_mbps: currentMbps,
+      peak_mbps: peakMbps,
+      avg_mbps: avgMbps,
+      total_bytes: totalBytes,
+      total_bytes_formatted: formatBytes(totalBytes),
+      lan_bytes: lanBytes,
+      lan_bytes_formatted: formatBytes(lanBytes),
+      wan_bytes: wanBytes,
+      wan_bytes_formatted: formatBytes(wanBytes),
+    },
+    points,
+  };
+}
+
+// 2. 시간대별 피크 타임 바 차트 (00시 ~ 23시)
+export interface PeakHourItem {
+  hour: number;
+  hour_label: string; // "00시", "01시", ...
+  total_count: number;
+  play_count: number;
+  user_count: number;
+  total_bytes: number;
+  total_bytes_formatted: string;
+  is_peak: boolean;
+}
+
+export interface PeakHoursResult {
+  source: "activity" | "views30d";
+  summary: {
+    peak_hour: number;
+    peak_hour_label: string;
+    peak_count: number;
+    busiest_window: string;
+    quietest_window: string;
+    total_samples: number;
+  };
+  hours: PeakHourItem[];
+}
+
+export function getPeakHours(source: "activity" | "views30d" = "activity"): PeakHoursResult {
+  const hourMap: Map<number, { total: number; plays: number; users: Set<string>; bytes: number }> = new Map();
+  for (let h = 0; h < 24; h++) {
+    hourMap.set(h, { total: 0, plays: 0, users: new Set(), bytes: 0 });
+  }
+
+  let totalSamples = 0;
+
+  if (source === "views30d" && plexDb) {
+    try {
+      const rows = plexDb.query(`
+        SELECT
+          CAST(strftime('%H', datetime(viewed_at, 'unixepoch', 'localtime')) AS INTEGER) as hour,
+          COUNT(*) as cnt,
+          COUNT(DISTINCT account_id) as users
+        FROM metadata_item_views
+        WHERE viewed_at >= strftime('%s', 'now', '-30 days')
+        GROUP BY hour
+      `).all() as Array<{ hour: number; cnt: number; users: number }>;
+
+      for (const r of rows) {
+        const item = hourMap.get(r.hour);
+        if (item) {
+          item.total += r.cnt;
+          item.plays += r.cnt;
+          totalSamples += r.cnt;
+        }
+      }
+    } catch (err) {
+      console.error("[Analytics] 30일 시청 기록 피크 조회 실패:", err);
+    }
+  } else {
+    // 기본값: 대시보드 activity_logs 기준
+    const rows = db.query(`
+      SELECT
+        CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+        user_name,
+        activity_type,
+        file_size_bytes
+      FROM activity_logs
+    `).all() as Array<{ hour: number; user_name: string; activity_type: string; file_size_bytes: number }>;
+
+    for (const r of rows) {
+      const item = hourMap.get(r.hour);
+      if (item) {
+        item.total++;
+        if (r.activity_type.startsWith("PLAY")) {
+          item.plays++;
+        }
+        item.users.add(r.user_name);
+        item.bytes += r.file_size_bytes;
+        totalSamples++;
+      }
+    }
+  }
+
+  // 상위 피크 시간대 판정
+  const sortedByTotal = [...hourMap.entries()].sort((a, b) => b[1].total - a[1].total);
+  const peakHour = sortedByTotal[0]?.[0] ?? 20;
+  const peakCount = sortedByTotal[0]?.[1].total ?? 0;
+  const top3Hours = new Set(sortedByTotal.slice(0, 3).map((e) => e[0]));
+
+  // 연속된 3시간 창 중 가장 붐비는 구간과 한적한 구간 계산
+  let maxWindowSum = -1;
+  let maxWindowStart = 0;
+  let minWindowSum = Infinity;
+  let minWindowStart = 0;
+
+  for (let h = 0; h < 24; h++) {
+    const sum = (hourMap.get(h)?.total || 0) + (hourMap.get((h + 1) % 24)?.total || 0) + (hourMap.get((h + 2) % 24)?.total || 0);
+    if (sum > maxWindowSum) {
+      maxWindowSum = sum;
+      maxWindowStart = h;
+    }
+    if (sum < minWindowSum) {
+      minWindowSum = sum;
+      minWindowStart = h;
+    }
+  }
+
+  const hours: PeakHourItem[] = [];
+  for (let h = 0; h < 24; h++) {
+    const data = hourMap.get(h)!;
+    hours.push({
+      hour: h,
+      hour_label: `${String(h).padStart(2, "0")}시`,
+      total_count: data.total,
+      play_count: data.plays,
+      user_count: data.users.size,
+      total_bytes: data.bytes,
+      total_bytes_formatted: formatBytes(data.bytes),
+      is_peak: top3Hours.has(h),
+    });
+  }
+
+  const formatWindow = (start: number) => `${String(start).padStart(2, "0")}시 ~ ${String((start + 3) % 24).padStart(2, "0")}시`;
+
+  return {
+    source,
+    summary: {
+      peak_hour: peakHour,
+      peak_hour_label: `${String(peakHour).padStart(2, "0")}시`,
+      peak_count: peakCount,
+      busiest_window: formatWindow(maxWindowStart),
+      quietest_window: formatWindow(minWindowStart),
+      total_samples: totalSamples,
+    },
+    hours,
+  };
+}
+
+// 3. 최근 30일간 최다 재생 콘텐츠 Top 10
+export interface TopContentItem {
+  rank: number;
+  title: string;
+  metadata_type: number;
+  type_label: string; // "드라마/시리즈" | "영화" | "음악" | "기타"
+  play_count: number;
+  viewer_count: number;
+  last_played_at: string;
+  thumb_url: string | null;
+  percentage: number; // 1위 대비 비율 (0 ~ 100)
+}
+
+export function getTop10PlayedContent(): TopContentItem[] {
+  if (!plexDb) {
+    // 폴백: activity_logs에서 집계
+    const rows = db.query(`
+      SELECT
+        COALESCE(show_title, media_title) as title,
+        media_type,
+        COUNT(*) as play_count,
+        COUNT(DISTINCT user_name) as viewer_count,
+        MAX(timestamp) as last_played_at
+      FROM activity_logs
+      WHERE activity_type IN ('PLAY_START', 'PLAYING') AND media_title IS NOT NULL
+      GROUP BY COALESCE(show_title, media_title)
+      ORDER BY play_count DESC
+      LIMIT 10
+    `).all() as Array<{ title: string; media_type: string; play_count: number; viewer_count: number; last_played_at: string }>;
+
+    const maxCount = rows[0]?.play_count || 1;
+    return rows.map((r, idx) => ({
+      rank: idx + 1,
+      title: r.title,
+      metadata_type: r.media_type === "movie" ? 1 : 4,
+      type_label: r.media_type === "movie" ? "영화" : "드라마/시리즈",
+      play_count: r.play_count,
+      viewer_count: r.viewer_count,
+      last_played_at: r.last_played_at,
+      thumb_url: null,
+      percentage: Math.round((r.play_count / maxCount) * 100),
+    }));
+  }
+
+  try {
+    const rows = plexDb.query(`
+      SELECT
+        COALESCE(NULLIF(grandparent_title, ''), title) as display_title,
+        metadata_type,
+        thumb_url,
+        COUNT(*) as play_count,
+        COUNT(DISTINCT account_id) as viewer_count,
+        datetime(MAX(viewed_at), 'unixepoch', 'localtime') as last_viewed_at
+      FROM metadata_item_views
+      WHERE viewed_at >= strftime('%s', 'now', '-30 days')
+      GROUP BY COALESCE(NULLIF(grandparent_title, ''), title)
+      ORDER BY play_count DESC
+      LIMIT 10;
+    `).all() as Array<{
+      display_title: string;
+      metadata_type: number;
+      thumb_url: string | null;
+      play_count: number;
+      viewer_count: number;
+      last_viewed_at: string;
+    }>;
+
+    const maxCount = rows[0]?.play_count || 1;
+
+    return rows.map((r, idx) => {
+      let typeLabel = "기타";
+      if (r.metadata_type === 1) typeLabel = "영화";
+      else if (r.metadata_type === 4 || r.metadata_type === 2) typeLabel = "드라마/시리즈";
+      else if (r.metadata_type === 8 || r.metadata_type === 9 || r.metadata_type === 10) typeLabel = "음악";
+
+      let thumb = r.thumb_url;
+      // HTTP 웹 이미지 외의 내부 Plex URL(metadata://)은 외부 표시가 안 되므로 null 처리
+      if (thumb && !thumb.startsWith("http://") && !thumb.startsWith("https://")) {
+        thumb = null;
+      }
+
+      return {
+        rank: idx + 1,
+        title: r.display_title,
+        metadata_type: r.metadata_type,
+        type_label: typeLabel,
+        play_count: r.play_count,
+        viewer_count: r.viewer_count,
+        last_played_at: r.last_viewed_at,
+        thumb_url: thumb,
+        percentage: Math.round((r.play_count / maxCount) * 100),
+      };
+    });
+  } catch (err) {
+    console.error("[Analytics] 최근 30일 Top 10 조회 오류:", err);
+    return [];
+  }
+}
+
+// 4. 이번 달 사용자별 추정 데이터 사용량 (Per-user estimated data consumption this calendar month)
+export interface UserMonthlyDataConsumption {
+  rank: number;
+  account_id: number | null;
+  user_name: string;
+  alias: string;
+  display_name: string;
+  total_bytes: number;
+  total_bytes_formatted: string;
+  lan_bytes: number;
+  lan_bytes_formatted: string;
+  wan_bytes: number;
+  wan_bytes_formatted: string;
+  percentage: number; // 전체 사용량 대비 점유율
+}
+
+export interface MonthlyConsumptionResult {
+  month_label: string; // e.g. "2026년 9월"
+  summary: {
+    total_bytes: number;
+    total_bytes_formatted: string;
+    wan_bytes: number;
+    wan_bytes_formatted: string;
+    lan_bytes: number;
+    lan_bytes_formatted: string;
+    active_users: number;
+    avg_per_user: string;
+  };
+  users: UserMonthlyDataConsumption[];
+}
+
+export function getMonthlyUserConsumption(): MonthlyConsumptionResult {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const monthLabel = `${year}년 ${month}월`;
+
+  const aliases = getAliases();
+
+  if (!plexDb) {
+    // 폴백: activity_logs에서 이번 달 집계
+    const rows = db.query(`
+      SELECT
+        user_name,
+        SUM(file_size_bytes) as total_bytes,
+        SUM(CASE WHEN client_ip LIKE '192.168.%' OR client_ip LIKE '172.%' OR client_ip LIKE '10.%' OR client_ip LIKE '127.%' THEN file_size_bytes ELSE 0 END) as lan_bytes,
+        SUM(CASE WHEN client_ip NOT LIKE '192.168.%' AND client_ip NOT LIKE '172.%' AND client_ip NOT LIKE '10.%' AND client_ip NOT LIKE '127.%' THEN file_size_bytes ELSE 0 END) as wan_bytes
+      FROM activity_logs
+      WHERE timestamp >= date('now', 'start of month')
+      GROUP BY user_name
+      ORDER BY total_bytes DESC
+    `).all() as Array<{ user_name: string; total_bytes: number; lan_bytes: number; wan_bytes: number }>;
+
+    let allTotal = 0;
+    let allLan = 0;
+    let allWan = 0;
+
+    for (const r of rows) {
+      allTotal += r.total_bytes;
+      allLan += r.lan_bytes;
+      allWan += r.wan_bytes;
+    }
+
+    const users: UserMonthlyDataConsumption[] = rows.map((r, idx) => {
+      const alias = (aliases[r.user_name] || "").trim();
+      const displayName = alias ? `${alias} (${r.user_name})` : r.user_name;
+      const pct = allTotal > 0 ? Number(((r.total_bytes / allTotal) * 100).toFixed(1)) : 0;
+      return {
+        rank: idx + 1,
+        account_id: null,
+        user_name: r.user_name,
+        alias,
+        display_name: displayName,
+        total_bytes: r.total_bytes,
+        total_bytes_formatted: formatBytes(r.total_bytes),
+        lan_bytes: r.lan_bytes,
+        lan_bytes_formatted: formatBytes(r.lan_bytes),
+        wan_bytes: r.wan_bytes,
+        wan_bytes_formatted: formatBytes(r.wan_bytes),
+        percentage: pct,
+      };
+    });
+
+    const avg = users.length > 0 ? formatBytes(Math.round(allTotal / users.length)) : "0 B";
+
+    return {
+      month_label: monthLabel,
+      summary: {
+        total_bytes: allTotal,
+        total_bytes_formatted: formatBytes(allTotal),
+        wan_bytes: allWan,
+        wan_bytes_formatted: formatBytes(allWan),
+        lan_bytes: allLan,
+        lan_bytes_formatted: formatBytes(allLan),
+        active_users: users.length,
+        avg_per_user: avg,
+      },
+      users,
+    };
+  }
+
+  try {
+    // 이번 달 1일 00:00:00 (KST 기준) -> UTC 초
+    const startOfMonthLocal = new Date(year, now.getMonth(), 1, 0, 0, 0, 0);
+    const startOfMonthEpoch = Math.floor(startOfMonthLocal.getTime() / 1000);
+
+    const rows = plexDb.query(`
+      SELECT
+        b.account_id,
+        COALESCE(a.name, '계정 #' || b.account_id) as user_name,
+        SUM(b.bytes) as total_bytes,
+        SUM(CASE WHEN b.lan = 1 THEN b.bytes ELSE 0 END) as lan_bytes,
+        SUM(CASE WHEN b.lan = 0 THEN b.bytes ELSE 0 END) as wan_bytes
+      FROM statistics_bandwidth b
+      LEFT JOIN accounts a ON a.id = b.account_id
+      WHERE b.timespan = 4 AND b.at >= ?
+      GROUP BY b.account_id
+      ORDER BY total_bytes DESC;
+    `).all(startOfMonthEpoch) as Array<{
+      account_id: number;
+      user_name: string;
+      total_bytes: number;
+      lan_bytes: number;
+      wan_bytes: number;
+    }>;
+
+    let allTotal = 0;
+    let allLan = 0;
+    let allWan = 0;
+
+    for (const r of rows) {
+      allTotal += r.total_bytes;
+      allLan += r.lan_bytes;
+      allWan += r.wan_bytes;
+    }
+
+    const users: UserMonthlyDataConsumption[] = rows.map((r, idx) => {
+      const alias = (aliases[r.user_name] || "").trim();
+      const displayName = alias ? `${alias} (${r.user_name})` : r.user_name;
+      const pct = allTotal > 0 ? Number(((r.total_bytes / allTotal) * 100).toFixed(1)) : 0;
+      return {
+        rank: idx + 1,
+        account_id: r.account_id,
+        user_name: r.user_name,
+        alias,
+        display_name: displayName,
+        total_bytes: r.total_bytes,
+        total_bytes_formatted: formatBytes(r.total_bytes),
+        lan_bytes: r.lan_bytes,
+        lan_bytes_formatted: formatBytes(r.lan_bytes),
+        wan_bytes: r.wan_bytes,
+        wan_bytes_formatted: formatBytes(r.wan_bytes),
+        percentage: pct,
+      };
+    });
+
+    const avg = users.length > 0 ? formatBytes(Math.round(allTotal / users.length)) : "0 B";
+
+    return {
+      month_label: monthLabel,
+      summary: {
+        total_bytes: allTotal,
+        total_bytes_formatted: formatBytes(allTotal),
+        wan_bytes: allWan,
+        wan_bytes_formatted: formatBytes(allWan),
+        lan_bytes: allLan,
+        lan_bytes_formatted: formatBytes(allLan),
+        active_users: users.length,
+        avg_per_user: avg,
+      },
+      users,
+    };
+  } catch (err) {
+    console.error("[Analytics] 월간 사용자 대역폭 조회 오류:", err);
+    return {
+      month_label: monthLabel,
+      summary: {
+        total_bytes: 0,
+        total_bytes_formatted: "0 B",
+        wan_bytes: 0,
+        wan_bytes_formatted: "0 B",
+        lan_bytes: 0,
+        lan_bytes_formatted: "0 B",
+        active_users: 0,
+        avg_per_user: "0 B",
+      },
+      users: [],
+    };
+  }
+}
