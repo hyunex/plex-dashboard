@@ -290,10 +290,25 @@ function bindEvents() {
 function switchView(viewName) {
   state.currentView = viewName;
 
-  // 모든 뷰 숨김
-  el.viewDashboard.classList.add("hidden");
-  el.viewLogs.classList.add("hidden");
-  if (el.viewAnalytics) el.viewAnalytics.classList.add("hidden");
+  const viewDashboard = el.viewDashboard || document.getElementById("view-dashboard");
+  const viewLogs = el.viewLogs || document.getElementById("view-logs");
+  const viewAnalytics = el.viewAnalytics || document.getElementById("view-analytics");
+  const navDashboard = el.navDashboard || document.getElementById("nav-dashboard");
+  const navAnalytics = el.navAnalytics || document.getElementById("nav-analytics");
+
+  // 모든 뷰 숨김 (클래스 및 인라인 스타일 모두 처리)
+  if (viewDashboard) {
+    viewDashboard.classList.add("hidden");
+    viewDashboard.style.display = "none";
+  }
+  if (viewLogs) {
+    viewLogs.classList.add("hidden");
+    viewLogs.style.display = "none";
+  }
+  if (viewAnalytics) {
+    viewAnalytics.classList.add("hidden");
+    viewAnalytics.style.display = "none";
+  }
 
   // 네비게이션 버튼 초기화
   const navInactive =
@@ -301,18 +316,20 @@ function switchView(viewName) {
   const navActive =
     "w-full flex items-center space-x-3 px-3 py-2 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors";
 
-  el.navDashboard.className = navInactive;
-  if (el.navAnalytics) el.navAnalytics.className = navInactive;
+  if (navDashboard) navDashboard.className = navInactive;
+  if (navAnalytics) navAnalytics.className = navInactive;
 
   // 모바일 탑바 버튼 초기화
-  if (el.btnMobileNavDashboard) {
-    el.btnMobileNavDashboard.className =
+  const mbDash = el.btnMobileNavDashboard || document.getElementById("btn-mobile-nav-dashboard");
+  const mbAnalytics = el.btnMobileNavAnalytics || document.getElementById("btn-mobile-nav-analytics");
+  if (mbDash) {
+    mbDash.className =
       viewName === "dashboard"
         ? "px-2.5 py-1 text-xs rounded-md bg-plex/10 text-plex hover:bg-plex/20 transition-colors flex items-center space-x-1"
         : "px-2.5 py-1 text-xs rounded-md text-gray-400 hover:text-plex transition-colors flex items-center space-x-1";
   }
-  if (el.btnMobileNavAnalytics) {
-    el.btnMobileNavAnalytics.className =
+  if (mbAnalytics) {
+    mbAnalytics.className =
       viewName === "analytics"
         ? "px-2.5 py-1 text-xs rounded-md bg-plex/10 text-plex hover:bg-plex/20 transition-colors flex items-center space-x-1"
         : "px-2.5 py-1 text-xs rounded-md text-gray-400 hover:text-plex transition-colors flex items-center space-x-1";
@@ -325,26 +342,39 @@ function switchView(viewName) {
   });
 
   if (viewName === "dashboard") {
-    el.viewDashboard.classList.remove("hidden");
-    el.navDashboard.className = navActive;
+    if (viewDashboard) {
+      viewDashboard.classList.remove("hidden");
+      viewDashboard.style.display = "flex";
+    }
+    if (navDashboard) navDashboard.className = navActive;
     stopLiveTail();
     if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
     if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
     requestAnimationFrame(() => anchorToBottom(el.activityList));
   } else if (viewName === "analytics") {
-    if (el.viewAnalytics) el.viewAnalytics.classList.remove("hidden");
-    if (el.navAnalytics) el.navAnalytics.className = navActive;
+    if (viewAnalytics) {
+      viewAnalytics.classList.remove("hidden");
+      viewAnalytics.style.display = "flex";
+    }
+    if (navAnalytics) navAnalytics.className = navActive;
     stopLiveTail();
     if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
     if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
-    loadAnalytics();
+    // 레이아웃이 확정된 후 분석 데이터 및 차트 로드
+    requestAnimationFrame(() => {
+      loadAnalytics();
+    });
   } else {
-    el.viewLogs.classList.remove("hidden");
+    if (viewLogs) {
+      viewLogs.classList.remove("hidden");
+      viewLogs.style.display = "flex";
+    }
     if (el.sidebarAside) el.sidebarAside.classList.remove("drawer-open");
     if (el.sidebarBackdrop) el.sidebarBackdrop.classList.add("hidden");
     requestAnimationFrame(() => anchorToBottom(el.logTerminal));
   }
 }
+window.switchView = switchView;
 // 4. 대시보드 데이터 로드
 async function refreshDashboard() {
   await loadAliases();
@@ -1056,8 +1086,9 @@ async function loadAnalytics(isRefresh = false) {
   if (state.analytics.isLoading) return;
   state.analytics.isLoading = true;
 
-  if (isRefresh && el.btnRefreshAnalytics) {
-    el.btnRefreshAnalytics.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> <span class="hidden sm:inline">로딩 중...</span>`;
+  const refreshBtn = el.btnRefreshAnalytics || document.getElementById("btn-refresh-analytics");
+  if (isRefresh && refreshBtn) {
+    refreshBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> <span class="hidden sm:inline">로딩 중...</span>`;
   }
 
   try {
@@ -1068,23 +1099,39 @@ async function loadAnalytics(isRefresh = false) {
     const data = await res.json();
 
     if (data.bandwidth) {
-      renderBandwidthChart(data.bandwidth);
+      try {
+        renderBandwidthChart(data.bandwidth);
+      } catch (e) {
+        console.error("대역폭 차트 렌더 실패:", e);
+      }
     }
     if (data.peakHours) {
-      renderPeakHoursChart(data.peakHours);
+      try {
+        renderPeakHoursChart(data.peakHours);
+      } catch (e) {
+        console.error("피크 시간대 차트 렌더 실패:", e);
+      }
     }
     if (data.topContent) {
-      renderTopContent(data.topContent);
+      try {
+        renderTopContent(data.topContent);
+      } catch (e) {
+        console.error("Top 10 콘텐츠 렌더 실패:", e);
+      }
     }
     if (data.monthlyUsers) {
-      renderMonthlyUsers(data.monthlyUsers);
+      try {
+        renderMonthlyUsers(data.monthlyUsers);
+      } catch (e) {
+        console.error("월간 사용자 소비량 렌더 실패:", e);
+      }
     }
   } catch (err) {
     console.error("통계 데이터 로드 실패:", err);
   } finally {
     state.analytics.isLoading = false;
-    if (el.btnRefreshAnalytics) {
-      el.btnRefreshAnalytics.innerHTML = `<i class="fa-solid fa-rotate-right text-[10px]"></i> <span class="hidden sm:inline">새로고침</span>`;
+    if (refreshBtn) {
+      refreshBtn.innerHTML = `<i class="fa-solid fa-rotate-right text-[10px]"></i> <span class="hidden sm:inline">새로고침</span>`;
     }
   }
 }
@@ -1141,17 +1188,28 @@ function updatePeakSourceButtons() {
 function renderBandwidthChart(data) {
   if (!data || !data.summary || !data.points) return;
 
-  // 요약 지표 업데이트
-  if (el.bwStatCurrent) el.bwStatCurrent.innerText = formatMbps(data.summary.current_mbps);
-  if (el.bwStatPeak) el.bwStatPeak.innerText = formatMbps(data.summary.peak_mbps);
-  if (el.bwStatTotal) el.bwStatTotal.innerText = data.summary.total_bytes_formatted;
-  if (el.bwStatAvg) el.bwStatAvg.innerText = formatMbps(data.summary.avg_mbps);
+  const cur = el.bwStatCurrent || document.getElementById("bw-stat-current");
+  const peak = el.bwStatPeak || document.getElementById("bw-stat-peak");
+  const tot = el.bwStatTotal || document.getElementById("bw-stat-total");
+  const avg = el.bwStatAvg || document.getElementById("bw-stat-avg");
+
+  if (cur) cur.innerText = formatMbps(data.summary.current_mbps);
+  if (peak) peak.innerText = formatMbps(data.summary.peak_mbps);
+  if (tot) tot.innerText = data.summary.total_bytes_formatted;
+  if (avg) avg.innerText = formatMbps(data.summary.avg_mbps);
 
   const canvas = document.getElementById("chart-bandwidth");
-  if (!canvas || typeof Chart === "undefined") return;
+  if (!canvas) return;
+
+  if (typeof Chart === "undefined") {
+    renderFallbackBandwidth(data, canvas);
+    return;
+  }
 
   if (state.analytics.bandwidthChart) {
-    state.analytics.bandwidthChart.destroy();
+    try {
+      state.analytics.bandwidthChart.destroy();
+    } catch {}
     state.analytics.bandwidthChart = null;
   }
 
@@ -1251,14 +1309,23 @@ function renderBandwidthChart(data) {
 function renderPeakHoursChart(data) {
   if (!data || !data.hours || !data.summary) return;
 
-  if (el.peakHourBadge) el.peakHourBadge.innerText = data.summary.peak_hour_label;
-  if (el.peakWindowBadge) el.peakWindowBadge.innerText = data.summary.busiest_window;
+  const peakBadge = el.peakHourBadge || document.getElementById("peak-hour-badge");
+  const winBadge = el.peakWindowBadge || document.getElementById("peak-window-badge");
+  if (peakBadge) peakBadge.innerText = data.summary.peak_hour_label;
+  if (winBadge) winBadge.innerText = data.summary.busiest_window;
 
   const canvas = document.getElementById("chart-peak-hours");
-  if (!canvas || typeof Chart === "undefined") return;
+  if (!canvas) return;
+
+  if (typeof Chart === "undefined") {
+    renderFallbackPeakHours(data, canvas);
+    return;
+  }
 
   if (state.analytics.peakHoursChart) {
-    state.analytics.peakHoursChart.destroy();
+    try {
+      state.analytics.peakHoursChart.destroy();
+    } catch {}
     state.analytics.peakHoursChart = null;
   }
 
@@ -1347,7 +1414,8 @@ function renderPeakHoursChart(data) {
 
 // 3) 최근 30일간 최다 재생 콘텐츠 Top 10 렌더링
 function renderTopContent(items) {
-  if (!el.topContentList) return;
+  const container = el.topContentList || document.getElementById("top-content-list");
+  if (!container) return;
 
   if (!items || items.length === 0) {
     el.topContentList.innerHTML = `
@@ -1409,21 +1477,29 @@ function renderTopContent(items) {
     `;
   }).join("");
 
-  el.topContentList.innerHTML = html;
+  container.innerHTML = html;
 }
 
 // 4) 이번 달 사용자별 추정 데이터 사용량 렌더링
 function renderMonthlyUsers(data) {
   if (!data || !data.summary || !data.users) return;
 
-  if (el.monthlyLabelBadge) el.monthlyLabelBadge.innerText = data.month_label;
-  if (el.monthlyTotalBytes) el.monthlyTotalBytes.innerText = data.summary.total_bytes_formatted;
-  if (el.monthlyWanBytes) el.monthlyWanBytes.innerText = data.summary.wan_bytes_formatted;
-  if (el.monthlyLanBytes) el.monthlyLanBytes.innerText = data.summary.lan_bytes_formatted;
-  if (el.monthlyActiveUsers) el.monthlyActiveUsers.innerText = `${data.summary.active_users}명`;
-  if (el.monthlyAvgUser) el.monthlyAvgUser.innerText = data.summary.avg_per_user;
+  const lbl = el.monthlyLabelBadge || document.getElementById("monthly-label-badge");
+  const tot = el.monthlyTotalBytes || document.getElementById("monthly-total-bytes");
+  const wan = el.monthlyWanBytes || document.getElementById("monthly-wan-bytes");
+  const lan = el.monthlyLanBytes || document.getElementById("monthly-lan-bytes");
+  const usr = el.monthlyActiveUsers || document.getElementById("monthly-active-users");
+  const avg = el.monthlyAvgUser || document.getElementById("monthly-avg-user");
+  const container = el.monthlyUsersList || document.getElementById("monthly-users-list");
 
-  if (!el.monthlyUsersList) return;
+  if (lbl) lbl.innerText = data.month_label;
+  if (tot) tot.innerText = data.summary.total_bytes_formatted;
+  if (wan) wan.innerText = data.summary.wan_bytes_formatted;
+  if (lan) lan.innerText = data.summary.lan_bytes_formatted;
+  if (usr) usr.innerText = `${data.summary.active_users}명`;
+  if (avg) avg.innerText = data.summary.avg_per_user;
+
+  if (!container) return;
 
   if (data.users.length === 0) {
     el.monthlyUsersList.innerHTML = `
@@ -1468,8 +1544,49 @@ function renderMonthlyUsers(data) {
       </div>
     `;
   }).join("");
+  container.innerHTML = html;
+}
+function renderFallbackBandwidth(data, canvas) {
+  const container = canvas.parentElement;
+  if (!container) return;
+  const points = data.points || [];
+  const max = Math.max(...points.map((p) => p.total_mbps), 1);
+  const bars = points
+    .map(
+      (p) => `
+      <div class="flex-1 flex flex-col items-center justify-end h-full group relative" title="${p.time_label}: ${p.total_mbps} Mbps">
+        <div class="w-full bg-plex/80 hover:bg-plex rounded-t transition-all" style="height: ${Math.max(4, Math.round((p.total_mbps / max) * 100))}%;"></div>
+      </div>
+    `
+    )
+    .join("");
+  container.innerHTML = `
+    <div class="w-full h-full flex items-end gap-0.5 pt-4 pb-1">
+      ${bars}
+    </div>
+  `;
+}
 
-  el.monthlyUsersList.innerHTML = html;
+function renderFallbackPeakHours(data, canvas) {
+  const container = canvas.parentElement;
+  if (!container) return;
+  const hours = data.hours || [];
+  const max = Math.max(...hours.map((h) => h.total_count), 1);
+  const bars = hours
+    .map(
+      (h) => `
+      <div class="flex-1 flex flex-col items-center justify-end h-full group relative" title="${h.hour_label}: ${h.total_count}건">
+        <div class="w-full ${h.is_peak ? "bg-plex" : "bg-slate-600/60"} hover:bg-plex rounded-t transition-all" style="height: ${Math.max(4, Math.round((h.total_count / max) * 100))}%;"></div>
+        <span class="text-[8px] text-gray-500 mt-1 select-none">${h.hour % 3 === 0 ? h.hour : ""}</span>
+      </div>
+    `
+    )
+    .join("");
+  container.innerHTML = `
+    <div class="w-full h-full flex items-end gap-1 pt-4 pb-2">
+      ${bars}
+    </div>
+  `;
 }
 // 앱 실행
 document.addEventListener("DOMContentLoaded", init);

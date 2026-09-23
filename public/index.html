@@ -24,8 +24,13 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260923_analytics">
+  <link rel="stylesheet" href="/style.css?v=20260923_fixanalytics">
   <script src="/chart.umd.min.js"></script>
+  <script>
+    if (typeof Chart === "undefined") {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"><\/script>');
+    }
+  </script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body class="bg-[#0e1117] text-gray-200 overflow-hidden flex flex-col md:flex-row font-sans antialiased">
@@ -42,11 +47,11 @@
       <span class="font-bold text-white text-sm tracking-tight">Plex 로그 매니저</span>
     </div>
     <div class="flex items-center space-x-1">
-      <button id="btn-mobile-nav-dashboard" class="px-2.5 py-1 text-xs rounded-md bg-plex/10 text-plex hover:bg-plex/20 transition-colors flex items-center space-x-1" title="활동 대시보드">
+      <button id="btn-mobile-nav-dashboard" onclick="switchView('dashboard')" class="px-2.5 py-1 text-xs rounded-md bg-plex/10 text-plex hover:bg-plex/20 transition-colors flex items-center space-x-1" title="활동 대시보드">
         <i class="fa-solid fa-chart-pie"></i>
         <span>활동</span>
       </button>
-      <button id="btn-mobile-nav-analytics" class="px-2.5 py-1 text-xs rounded-md text-gray-400 hover:text-plex transition-colors flex items-center space-x-1" title="서버 통계 & 분석">
+      <button id="btn-mobile-nav-analytics" onclick="switchView('analytics')" class="px-2.5 py-1 text-xs rounded-md text-gray-400 hover:text-plex transition-colors flex items-center space-x-1" title="서버 통계 & 분석">
         <i class="fa-solid fa-chart-line"></i>
         <span>통계</span>
       </button>
@@ -132,11 +137,11 @@
       <div>
         <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">대시보드</p>
         <div class="space-y-1">
-          <button id="nav-dashboard" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors">
+          <button id="nav-dashboard" onclick="switchView('dashboard')" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg bg-plex/10 text-plex font-medium hover:bg-plex/20 transition-colors">
             <i class="fa-solid fa-chart-pie w-5 text-center"></i>
             <span>사용자 활동 내역</span>
           </button>
-          <button id="nav-analytics" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-gray-800/60 hover:text-gray-200 transition-colors">
+          <button id="nav-analytics" onclick="switchView('analytics')" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-gray-800/60 hover:text-gray-200 transition-colors">
             <i class="fa-solid fa-chart-line w-5 text-center"></i>
             <span>서버 통계 & 분석</span>
           </button>
@@ -302,7 +307,7 @@
       </div>
     </div>
     <!-- 3. 서버 통계 & 분석 (Analytics) 뷰 -->
-    <div id="view-analytics" class="flex-1 flex flex-col min-w-0 hidden h-full overflow-y-auto bg-[#0e1117]">
+    <div id="view-analytics" class="flex-1 flex flex-col min-h-0 min-w-0 hidden overflow-y-auto bg-[#0e1117]">
       <!-- 분석 상단 툴바 -->
       <div class="bg-[#161b22] border-b border-gray-800 px-3.5 md:px-6 py-2.5 md:py-3.5 flex items-center justify-between gap-3 flex-shrink-0">
         <div class="flex items-center space-x-2.5">
@@ -558,6 +563,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260923_analytics"></script>
+  <script src="/app.js?v=20260923_fixanalytics"></script>
 </body>
 </html>
