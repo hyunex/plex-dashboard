@@ -1,11 +1,13 @@
 import { db, getAliases } from "./database.ts";
 import { plexDb } from "./plex_db.ts";
-export function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i >= 2 ? 2 : 1)} ${units[i]}`;
-}
+import { classifyIpScope } from "./geoip.ts";
+// 포맷터는 log_parser와 동일 구현을 재사용한다 (기존 analytics 정의는 정밀도가 달라 1 KB / 1.0 KB로 표기가 갈렸다).
+import { formatBytes } from "./log_parser.ts";
+export { formatBytes };
+
+/** LAN/WAN 분류 SQL 조각 — geoip.ts의 isPrivateIp와 동일 기준(172.16~31만 내부망)을 유지 */
+const LAN_IP_SQL = `(client_ip LIKE '192.168.%' OR client_ip LIKE '10.%' OR client_ip LIKE '127.%' OR client_ip GLOB '172.1[6-9].*' OR client_ip GLOB '172.2[0-9].*' OR client_ip GLOB '172.3[01].*')`;
+const KNOWN_IP_SQL = `(client_ip IS NOT NULL AND client_ip != '' AND client_ip != 'Unknown')`;
 
 export function formatMbps(mbps: number): string {
   if (mbps < 0.01) return "0.00 Mbps";
@@ -98,15 +100,11 @@ export function getBandwidthHistory(range: "1h" | "3h" | "6h" | "24h"): Bandwidt
     if (b) {
       const bytes = r.file_size_bytes;
       b.total += bytes;
-      const ip = r.client_ip || "";
-      const isLan =
-        ip.startsWith("192.168.") ||
-        ip.startsWith("10.") ||
-        ip.startsWith("172.") ||
-        ip.startsWith("127.");
-      if (isLan) {
+      // geoip.ts와 동일한 사설망 기준 사용 (기존 구현은 172.0.0.0/8 전체를 내부망으로 오분류했다)
+      const scope = classifyIpScope(r.client_ip);
+      if (scope === "lan") {
         b.lan += bytes;
-      } else {
+      } else if (scope === "wan") {
         b.wan += bytes;
       }
     }
@@ -324,19 +322,35 @@ export function getPeakHours(source: "activity" | "views30d" = "activity"): Peak
 }
 
 // Plex 서버 머신 식별자 및 공식 웹 URL 헬퍼
-let plexMachineIdentifier = "19b98de608795fd38dc942ab99885d7335d4e77a";
+// 특정 서버의 식별자를 소스에 하드코딩하지 않는다. /identity에서 조회하고, 조회 실패 시 빈 값으로 두어
+// 잘못된(다른 서버의) 딥링크가 생성되지 않도록 한다.
+const PLEX_BASE_URL = process.env.PLEX_URL || "http://127.0.0.1:32400";
+let plexMachineIdentifier = "";
 
 export async function initPlexServerInfo(): Promise<string> {
   try {
-    const res = await fetch("http://127.0.0.1:32400/identity");
+    const token = process.env.PLEX_TOKEN || "";
+    const res = await fetch(`${PLEX_BASE_URL}/identity`, {
+      headers: token ? { "X-Plex-Token": token } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
     if (res.ok) {
       const xml = await res.text();
       const match = xml.match(/machineIdentifier="([^"]+)"/);
       if (match) {
         plexMachineIdentifier = match[1];
+        console.log(`[Analytics] Plex 서버 식별자 확인: ${plexMachineIdentifier}`);
+      } else {
+        console.warn("[Analytics] /identity 응답에서 machineIdentifier를 찾지 못했습니다. Plex Web 딥링크가 생성되지 않습니다.");
       }
+    } else {
+      console.warn(`[Analytics] Plex /identity 응답 오류(${res.status}). Plex Web 딥링크가 생성되지 않습니다.`);
     }
-  } catch {}
+  } catch {
+    console.warn(
+      `[Analytics] Plex /identity 조회 실패(${PLEX_BASE_URL}). Plex Web 딥링크 없이 나머지 기능은 정상 동작합니다.`
+    );
+  }
   return plexMachineIdentifier;
 }
 initPlexServerInfo();
@@ -346,7 +360,7 @@ export function getPlexMachineIdentifier(): string {
 }
 
 export function makePlexMediaUrl(ratingKey: number | string | null | undefined): string | null {
-  if (!ratingKey) return null;
+  if (!ratingKey || !plexMachineIdentifier) return null;
   return `https://app.plex.tv/desktop/#!/server/${plexMachineIdentifier}/details?key=%2Flibrary%2Fmetadata%2F${ratingKey}`;
 }
 
@@ -411,9 +425,10 @@ export async function getPosterResponse(ratingKey: string): Promise<Response> {
       }
 
       for (const k of tryKeys) {
-        const photoUrl = `http://127.0.0.1:32400/photo/:/transcode?width=300&height=450&minSize=1&upscale=1&url=%2Flibrary%2Fmetadata%2F${k}%2Fthumb`;
+        const photoUrl = `${PLEX_BASE_URL}/photo/:/transcode?width=300&height=450&minSize=1&upscale=1&url=%2Flibrary%2Fmetadata%2F${k}%2Fthumb`;
         const res = await fetch(photoUrl, {
           headers: { "X-Plex-Token": token },
+          signal: AbortSignal.timeout(10000),
         });
         if (res.ok) {
           return new Response(res.body, {
@@ -431,8 +446,8 @@ export async function getPosterResponse(ratingKey: string): Promise<Response> {
 
   // 기본 Plex transcode 시도 (영화 등)
   try {
-    const photoUrl = `http://127.0.0.1:32400/photo/:/transcode?width=300&height=450&minSize=1&upscale=1&url=%2Flibrary%2Fmetadata%2F${ratingKey}%2Fthumb`;
-    const res = await fetch(photoUrl, { headers: { "X-Plex-Token": token } });
+    const photoUrl = `${PLEX_BASE_URL}/photo/:/transcode?width=300&height=450&minSize=1&upscale=1&url=%2Flibrary%2Fmetadata%2F${ratingKey}%2Fthumb`;
+    const res = await fetch(photoUrl, { headers: { "X-Plex-Token": token }, signal: AbortSignal.timeout(10000) });
     if (res.ok) {
       return new Response(res.body, {
         headers: {
@@ -611,12 +626,6 @@ export interface UserConsumptionResult {
   users: UserMonthlyDataConsumption[];
 }
 
-export type MonthlyConsumptionResult = UserConsumptionResult;
-
-export function getMonthlyUserConsumption(): UserConsumptionResult {
-  return getUserDataConsumption("1m");
-}
-
 export function getUserDataConsumption(rawRange: string = "1m"): UserConsumptionResult {
   const validRanges: UserConsumptionRange[] = ["1h", "1d", "1m", "1y", "all"];
   const range: UserConsumptionRange = validRanges.includes(rawRange as UserConsumptionRange)
@@ -665,8 +674,8 @@ export function getUserDataConsumption(rawRange: string = "1m"): UserConsumption
       SELECT
         user_name,
         SUM(file_size_bytes) as total_bytes,
-        SUM(CASE WHEN client_ip LIKE '192.168.%' OR client_ip LIKE '172.%' OR client_ip LIKE '10.%' OR client_ip LIKE '127.%' THEN file_size_bytes ELSE 0 END) as lan_bytes,
-        SUM(CASE WHEN client_ip NOT LIKE '192.168.%' AND client_ip NOT LIKE '172.%' AND client_ip NOT LIKE '10.%' AND client_ip NOT LIKE '127.%' THEN file_size_bytes ELSE 0 END) as wan_bytes
+        SUM(CASE WHEN ${LAN_IP_SQL} THEN file_size_bytes ELSE 0 END) as lan_bytes,
+        SUM(CASE WHEN ${KNOWN_IP_SQL} AND NOT ${LAN_IP_SQL} THEN file_size_bytes ELSE 0 END) as wan_bytes
       FROM activity_logs
       ${whereClause}
       GROUP BY user_name

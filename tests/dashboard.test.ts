@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parsePlexTimestamp, formatBytes, formatDuration, parseUserAgent, LogParser } from "../log_parser.ts";
-import { formatMbps, getBandwidthHistory, getPeakHours, getUserDataConsumption } from "../analytics.ts";
-import { isPrivateIp, formatLocation } from "../geoip.ts";
+import { formatBytes as formatBytesAnalytics, formatMbps, getBandwidthHistory, getPeakHours, getUserDataConsumption } from "../analytics.ts";
+import { classifyIpScope, isPrivateIp, formatLocation } from "../geoip.ts";
 import { BoundedMap } from "../bounded_map.ts";
 import { getDashboardStats } from "../database.ts";
 
@@ -128,5 +128,79 @@ describe("5. Analytics 및 통계 엔진 검증 (F-05, F-07)", () => {
       expect(Array.isArray(res.users)).toBe(true);
       expect(typeof res.summary.total_bytes).toBe("number");
     }
+  });
+});
+
+describe("6. 포맷터·사설망 분류 일관성 회귀 검증", () => {
+  test("formatBytes: analytics 재노출 구현이 log_parser와 동일 표기를 내야 함", () => {
+    for (const value of [0, 512, 1024, 1536, 1048576, 1073741824 * 2.5]) {
+      expect(formatBytesAnalytics(value)).toBe(formatBytes(value));
+    }
+    expect(formatBytesAnalytics(1024)).toBe("1 KB");
+  });
+
+  test("classifyIpScope: 172.16~31만 내부망으로 분류하고 알 수 없는 IP는 unknown", () => {
+    expect(classifyIpScope("172.16.5.4")).toBe("lan");
+    expect(classifyIpScope("172.31.255.254")).toBe("lan");
+    expect(classifyIpScope("192.168.1.20")).toBe("lan");
+    expect(classifyIpScope("10.8.0.2")).toBe("lan");
+    // 기존 구현은 172.0.0.0/8 전체를 내부망으로 오분류했다
+    expect(classifyIpScope("172.32.0.1")).toBe("wan");
+    expect(classifyIpScope("172.0.0.1")).toBe("wan");
+    expect(classifyIpScope("8.8.8.8")).toBe("wan");
+    expect(classifyIpScope("Unknown")).toBe("unknown");
+    expect(classifyIpScope(null)).toBe("unknown");
+    expect(classifyIpScope("")).toBe("unknown");
+  });
+});
+
+describe("7. Plezy/Android 기기 식별 및 다운로드 중복 방지", () => {
+  test("parseUserAgent: 로케일·Build 태그를 제거하고 Android 제품을 단정하지 않아야 함", () => {
+    const withLocale = parseUserAgent(
+      "Dalvik/2.1.0 (Linux; U; Android 14; ko-KR; SM-F976N Build/UP1A.231005.007)"
+    );
+    expect(withLocale.device_name).toBe("SM-F976N");
+    expect(withLocale.platform).toBe("Android");
+    // X-Plex-Product/학습 프로필이 제품을 결정하므로 UA 단계에서 Plezy로 단정하지 않는다
+    expect(withLocale.product).toBeUndefined();
+
+    const plain = parseUserAgent("Dalvik/2.1.0 (Linux; U; Android 11; SM-G991N Build/RP1A.200720.012)");
+    expect(plain.device_name).toBe("SM-G991N");
+    expect(plain.product).toBeUndefined();
+
+    expect(parseUserAgent("Plezy/1.4.2 (Android 16)").product).toBe("Plezy");
+    expect(parseUserAgent("Dart/3.13 (dart:io)").product).toBeUndefined();
+  });
+
+  test("parseLine: Content-Length로 기록된 다운로드는 Completed 라인에서 중복 생성되지 않아야 함", () => {
+    const parser = new LogParser();
+    const thread = "266479181275360";
+    const requestLine = `Sep 24, 2026 02:56:11.123 [${thread}] DEBUG - Request: [172.30.0.2:56840 (WAN)] GET /library/parts/12345/1690000000/file.mp4 (12 live) #3c7f4 GZIP Signed-in Token (testuser) (Range: bytes=0-) / X-Forwarded-For => 61.43.124.100`;
+    expect(parser.parseLine(requestLine)).toBeNull();
+
+    const contentLengthLine = `Sep 24, 2026 02:56:11.500 [${thread}] DEBUG - Content-Length of /share/media/놀라운 토요일.E371.mp4 is 2850591493 (of total: 2850591493).`;
+    const download = parser.parseLine(contentLengthLine);
+    expect(download).not.toBeNull();
+    expect(download?.activity_type).toBe("DOWNLOAD");
+    expect(download?.file_size_bytes).toBe(2850591493);
+    expect(download?.user_name).toBe("testuser");
+
+    const completedLine = `Sep 24, 2026 02:56:20.000 [${thread}] DEBUG - Completed: [172.30.0.2:56840] 200 GET /library/parts/12345/1690000000/file.mp4 (12 live) 9000ms 2850591493 bytes (Range: bytes=0-) #3c7f4`;
+    expect(parser.parseLine(completedLine)).toBeNull();
+  });
+
+  test("parseLine: 다운로드 소유 세션을 특정할 수 없으면 가장 최근 세션으로 폴백해야 함", () => {
+    const parser = new LogParser();
+    const firstRequest = `Sep 24, 2026 02:56:10.000 [111111111111111] DEBUG - Request: [172.30.0.9:50000 (WAN)] GET /library/parts/99999/1/a.mp4 (4 live) #aaaaa GZIP Signed-in Token (firstuser) / X-Forwarded-For => 61.43.124.200`;
+    const secondRequest = `Sep 24, 2026 02:56:11.000 [222222222222222] DEBUG - Request: [172.30.0.9:50001 (WAN)] GET /library/parts/88888/1/b.mp4 (4 live) #bbbbb GZIP Signed-in Token (seconduser) / X-Forwarded-For => 61.43.124.201`;
+    expect(parser.parseLine(firstRequest)).toBeNull();
+    expect(parser.parseLine(secondRequest)).toBeNull();
+
+    // 스레드도 파일 경로도 매칭되지 않는 시작 라인 (기존 구현은 Map 삽입 순서상 첫 항목 = firstuser에게 임의 귀속)
+    const contentLengthLine = `Sep 24, 2026 02:56:12.000 [333333333333333] DEBUG - Content-Length of /share/media/unknown.mp4 is 9000000000 (of total: 9000000000).`;
+    const event = parser.parseLine(contentLengthLine);
+    expect(event).not.toBeNull();
+    expect(event?.user_name).toBe("seconduser");
+    expect(event?.file_size_bytes).toBe(9000000000);
   });
 });

@@ -2,7 +2,6 @@ import {
   getUncachedIps,
   setCachedLocation,
   getCachedLocation,
-  db,
 } from "./database.ts";
 
 interface IpApiBatchItem {
@@ -46,6 +45,16 @@ export function isPrivateIp(ip: string): boolean {
   return false;
 }
 
+/**
+ * 내부망/외부망/판별불가 3상태 분류.
+ * isPrivateIp는 "Unknown"을 true로 취급하지만, 트래픽 집계에서는 알 수 없는 IP를
+ * 내부망으로 몰아넣으면 안 되므로 별도 함수로 분리했다.
+ */
+export function classifyIpScope(ip: string | null | undefined): "lan" | "wan" | "unknown" {
+  if (!ip || ip === "Unknown") return "unknown";
+  return isPrivateIp(ip) ? "lan" : "wan";
+}
+
 let lastBatchCall = 0;
 const MIN_BATCH_INTERVAL_MS = 2000; // 분당 최대 30회로 엄격 제한 (F-14: ip-api 무료 한도 45회 초과 차단 방지)
 
@@ -71,6 +80,8 @@ export async function lookupIpsBatch(ips: string[]): Promise<Record<string, stri
     }
     lastBatchCall = Date.now();
 
+    // ip-api 무료 티어는 HTTPS를 제공하지 않는다. 프라이버시 요구가 있으면 GEOIP_API_URL로
+    // HTTPS를 지원하는 제공자(예: 유료 ip-api 플랜, ipwho.is 등)를 주입할 수 있다.
     const endpoint = process.env.GEOIP_API_URL || "http://ip-api.com/batch?fields=status,countryCode,regionName,city,isp,query";
     const res = await fetch(endpoint, {
       method: "POST",
@@ -101,20 +112,3 @@ export async function lookupIpsBatch(ips: string[]): Promise<Record<string, stri
   return result;
 }
 
-/** 수집 시점: 신규 이벤트의 IP 위치를 캐시에서 즉시 메우고, 미보유분은 배치 조회 후 DB 역보정 */
-export async function backfillActivityLocations(limit = 200): Promise<number> {
-  const rows = db.query(
-    `SELECT DISTINCT client_ip FROM activity_logs
-     WHERE (ip_location IS NULL OR ip_location = '') AND client_ip IS NOT NULL AND client_ip != '' AND client_ip != 'Unknown'
-     ORDER BY id DESC LIMIT ?`
-  ).all(limit) as unknown as { client_ip: string }[];
-  const ips = rows.map((r) => r.client_ip);
-  if (ips.length === 0) return 0;
-  const locMap = await lookupIpsBatch(ips);
-  let updated = 0;
-  for (const [ip, loc] of Object.entries(locMap)) {
-    const r = db.run(`UPDATE activity_logs SET ip_location = ? WHERE (ip_location IS NULL OR ip_location = '') AND client_ip = ?`, [loc, ip]);
-    updated += r.changes as number;
-  }
-  return updated;
-}

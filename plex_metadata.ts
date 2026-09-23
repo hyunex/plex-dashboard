@@ -13,6 +13,41 @@ export interface MediaMetadata {
 
 const metadataCache = new BoundedMap<string, MediaMetadata>(3000);
 const partIdCache = new BoundedMap<string, string>(3000); // partId -> ratingKey
+const filePathCache = new BoundedMap<string, string>(3000); // 미디어 파일 경로 -> partId ("0" = 조회 실패 캐시)
+
+/**
+ * 로그에 찍힌 미디어 파일 절대 경로를 Plex DB의 media_parts.id로 역추적한다.
+ * Content-Length 라인에는 요청 ID가 없어서, 동시 다운로드 상황에서 엉뚱한 세션에
+ * 귀속되는 것을 막기 위해 사용한다.
+ */
+export function resolvePartIdByFilePath(filePath: string): string | null {
+  const key = filePath.trim();
+  if (!key) return null;
+  const cached = filePathCache.get(key);
+  if (cached !== undefined) return cached === "0" ? null : cached;
+  if (!plexDb) return null;
+
+  try {
+    const exact = plexDb.query(`SELECT id FROM media_parts WHERE file = ? LIMIT 1`).get(key) as { id: number } | null;
+    let partId: number | null = exact?.id ?? null;
+    if (partId === null) {
+      // Plex가 정규화/심볼릭 링크 경로를 저장한 경우를 대비해 파일명 기준으로 한 번 더 확인
+      const baseName = key.split(/[\\/]/).pop() ?? "";
+      if (baseName) {
+        const escaped = baseName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+        const byName = plexDb
+          .query(`SELECT id FROM media_parts WHERE file LIKE ? ESCAPE '\\' LIMIT 1`)
+          .get(`%/${escaped}`) as { id: number } | null;
+        partId = byName?.id ?? null;
+      }
+    }
+    filePathCache.set(key, partId === null ? "0" : String(partId));
+    return partId === null ? null : String(partId);
+  } catch (err) {
+    console.error(`[PlexMetadata] 파일 경로 → partId 조회 오류 (${key}):`, err);
+    return null;
+  }
+}
 
 export function resolveMediaByRatingKey(
   ratingKey: number | string,
